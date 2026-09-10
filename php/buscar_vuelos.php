@@ -138,6 +138,13 @@ if(!mysqli_stmt_execute($stmt)){
 }
 
 $resultado = mysqli_stmt_get_result($stmt);
+if($resultado === false){
+    error_log('[Acajutla Airlines] Error al obtener resultado de vuelos: ' . mysqli_stmt_error($stmt));
+    mysqli_stmt_close($stmt);
+    cerrarConexion();
+    responderError('No se pudo obtener el resultado de la búsqueda de vuelos.', 500);
+}
+
 $vuelos = [];
 while($fila = mysqli_fetch_assoc($resultado)){
 

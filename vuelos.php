@@ -460,6 +460,7 @@ Object.assign(Vistas, {
           <div class="tramo-hora"><b>${horaLlegada}</b><span>${destino.codigo_iata}</span></div>
         </div>
         <div class="vuelo-precio">
+          ${(() => { const p = Util.obtenerPrecioTarifa(v, 'ECONOMICA'); return p!=null ? `<span class="precio-desde">$${p}</span>` : ''; })()}
           ${reservable
             ? `<button class="btn btn-primario btn-sm" onclick="ResultadosVuelos.seleccionar(${v.id})">Seleccionar</button>`
             : `<button class="btn btn-outline btn-sm" disabled title="Este vuelo está cancelado y no puede reservarse">No disponible</button>`

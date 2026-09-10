@@ -1594,7 +1594,7 @@ const Vistas = {
   },
 
   /* ---------- RESULTADOS DE VUELOS / TARIFAS ---------- */
-  // Estos métodos se definen en vuelos.php, insertado vía <?php include ?>
+  // Estos métodos se definen en vuelos.php, insertado mediante un include de PHP
   // justo después de este objeto Vistas (ver más abajo en este archivo).
 
   /* ---------- RESUMEN ---------- */

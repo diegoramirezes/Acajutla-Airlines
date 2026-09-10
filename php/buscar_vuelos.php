@@ -23,9 +23,12 @@
  *   aircraft_types: id, model, manufacturer, total_capacity,
  *                   seat_configuration, range_km, active, created_at
  *
- * NO existe fare_classes ni ninguna tabla de tarifas por clase: el único
- * precio real confirmado antes de reservar es flights.base_price. Este
- * endpoint NO inventa tarifas por clase — solo entrega base_price.
+ * Tarifas por clase reales (fare_classes + flight_fares): cada vuelo
+ * incluye, cuando existen filas en flight_fares, la propiedad
+ * "tarifas": [{"clase":"ECONOMICA","precio":219.00}, ...]. Si un vuelo
+ * no tiene filas en flight_fares, no se agrega esa propiedad y el
+ * frontend sigue usando flights.base_price como respaldo (comportamiento
+ * ya previsto en Util.obtenerPrecioTarifa, sin cambios en el frontend).
  *
  * Reglas aplicadas (según lo indicado):
  *   - routes.active = 1 (ruta activa)
@@ -212,6 +215,68 @@ while($fila = mysqli_fetch_assoc($resultado)){
 
 mysqli_free_result($resultado);
 mysqli_stmt_close($stmt);
+
+// -------------------------------------------------------------------
+// Tarifas reales por clase (flight_fares + fare_classes).
+// Consulta separada (no se mezcla con el SELECT anterior para no
+// multiplicar filas por vuelo). Si un vuelo no tiene filas en
+// flight_fares, simplemente no se le agrega la propiedad 'tarifas' y
+// el frontend (Util.obtenerPrecioTarifa) sigue usando base_price como
+// respaldo, tal como ya estaba previsto.
+// -------------------------------------------------------------------
+$idsVuelos = array_column($vuelos, 'id');
+$tarifasPorVuelo = [];
+
+if(!empty($idsVuelos)){
+    $placeholders = implode(',', array_fill(0, count($idsVuelos), '?'));
+    $sqlTarifas = "SELECT ff.flight_id, fc.code, ff.price
+                    FROM flight_fares ff
+                    INNER JOIN fare_classes fc ON fc.id = ff.fare_class_id
+                    WHERE fc.active = 1
+                      AND ff.flight_id IN ($placeholders)";
+
+    $stmtTarifas = mysqli_prepare($conexion, $sqlTarifas);
+    if(!$stmtTarifas){
+        error_log('[Acajutla Airlines] Error al preparar consulta de tarifas: ' . mysqli_error($conexion));
+    } else {
+        $tipos = str_repeat('i', count($idsVuelos));
+        $paramsBind = [$stmtTarifas, $tipos];
+        foreach($idsVuelos as $key => $valorId){
+            $paramsBind[] = &$idsVuelos[$key];
+        }
+        call_user_func_array('mysqli_stmt_bind_param', $paramsBind);
+
+        if(!mysqli_stmt_execute($stmtTarifas)){
+            error_log('[Acajutla Airlines] Error al ejecutar consulta de tarifas: ' . mysqli_stmt_error($stmtTarifas));
+        } else {
+            $resultadoTarifas = mysqli_stmt_get_result($stmtTarifas);
+            if($resultadoTarifas === false){
+                error_log('[Acajutla Airlines] Error al obtener resultado de tarifas: ' . mysqli_stmt_error($stmtTarifas));
+            } else {
+                while($filaTarifa = mysqli_fetch_assoc($resultadoTarifas)){
+                    $idVueloTarifa = (int)$filaTarifa['flight_id'];
+                    if(!isset($tarifasPorVuelo[$idVueloTarifa])){
+                        $tarifasPorVuelo[$idVueloTarifa] = [];
+                    }
+                    $tarifasPorVuelo[$idVueloTarifa][] = [
+                        'clase'  => $filaTarifa['code'],
+                        'precio' => (float)$filaTarifa['price']
+                    ];
+                }
+                mysqli_free_result($resultadoTarifas);
+            }
+        }
+        mysqli_stmt_close($stmtTarifas);
+    }
+}
+
+foreach($vuelos as &$vuelo){
+    if(isset($tarifasPorVuelo[$vuelo['id']])){
+        $vuelo['tarifas'] = $tarifasPorVuelo[$vuelo['id']];
+    }
+}
+unset($vuelo);
+
 cerrarConexion();
 
 http_response_code(200);

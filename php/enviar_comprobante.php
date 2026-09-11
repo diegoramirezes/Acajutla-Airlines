@@ -369,8 +369,8 @@ function enviarCorreoSMTP($host, $puerto, $usuario, $password, $nombreRemitente,
     return true;
 }
 
-$smtpUser = getenv('diegoramireze658@gmail.com');
-$smtpPassword = getenv('ferh tbny ycrk rgge');
+$smtpUser = getenv('SMTP_USER');
+$smtpPassword = getenv('SMTP_PASSWORD');
 
 if(!$smtpUser || !$smtpPassword){
     actualizarEstadoEnvio($conexion, $emailOutboxId, 'failed', 'SMTP_USER / SMTP_PASSWORD no configurados en el entorno del servidor.');

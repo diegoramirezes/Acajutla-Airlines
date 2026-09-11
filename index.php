@@ -650,7 +650,12 @@ const API_CONFIG = {
     return ruta;
   },
   get ENDPOINT_AEROPUERTOS(){ return this.rutaBaseApp() + 'php/aeropuertos.php'; },
-  get ENDPOINT_BUSCAR_VUELOS(){ return this.rutaBaseApp() + 'php/buscar_vuelos.php'; }
+  get ENDPOINT_BUSCAR_VUELOS(){ return this.rutaBaseApp() + 'php/buscar_vuelos.php'; },
+  // Endpoint LOCAL real (php/enviar_comprobante.php) para el envío del
+  // comprobante por correo. Es independiente de USE_MOCKS: solo esta
+  // función de Api.sendBookingEmail() lo usa; el resto de Api sigue
+  // en modo mock hasta que se conecte en una etapa posterior.
+  get ENDPOINT_COMPROBANTE_EMAIL_REAL(){ return this.rutaBaseApp() + 'php/enviar_comprobante.php'; }
 };
 
 /* -----------------------------------------------------------------------
@@ -1355,11 +1360,14 @@ const Api = {
 
   // -----------------------------------------------------------------------
   // ENVÍO DE COMPROBANTE POR CORREO
-  // Arquitectura obligatoria: index.php -> API REST (Render) -> Gmail SMTP -> cliente.
+  // Conectado al backend LOCAL real: php/enviar_comprobante.php (XAMPP/Render).
+  // Deliberadamente NO depende de API_CONFIG.USE_MOCKS: el resto de Api
+  // (crearReserva, obtenerReserva, login, etc.) sigue en modo mock hasta
+  // una etapa posterior; solo el envío de correo ya está conectado.
   // El frontend NUNCA conoce ni envía la contraseña de aplicación de Gmail;
-  // solo hace fetch() al endpoint del backend con los datos no sensibles de la reserva.
-  // Endpoint esperado del backend: POST {API_BASE_URL}/reservas/{pnr}/comprobante/email
-  // Body esperado: { pnr, email, nombreCliente, total, estado, segmentos, pasajeros, pago }
+  // solo hace fetch() al endpoint PHP con los datos no sensibles de la reserva.
+  // Endpoint real: POST php/enviar_comprobante.php
+  // Body enviado: { pnr, email, nombreCliente, total, estado, segmentos, pasajeros, pago }
   // Respuesta esperada del backend: { success: boolean, message: string }
   // -----------------------------------------------------------------------
   async sendBookingEmail(reserva){
@@ -1375,27 +1383,26 @@ const Api = {
       pago: reserva.pago ? {metodo: reserva.pago.metodo, estado: reserva.pago.estado} : null
     };
 
-    if(!API_CONFIG.USE_MOCKS){
-      try{
-        const data = await apiFetch(API_CONFIG.ENDPOINT_COMPROBANTE_EMAIL(reserva.pnr), {
-          method:'POST',
-          body: JSON.stringify(payload)
-        });
-        return {
-          ok: !!data.success,
-          demo: false,
-          mensaje: data.message || (data.success ? 'Comprobante enviado correctamente.' : 'No pudimos enviar el comprobante. Intenta nuevamente.')
-        };
-      } catch(e){
-        // No exponer detalles técnicos ni de SMTP al usuario.
-        return {ok:false, demo:false, mensaje:'No pudimos enviar el comprobante. Intenta nuevamente.'};
-      }
+    try{
+      const controller = new AbortController();
+      const timeoutId = setTimeout(()=>controller.abort(), API_CONFIG.TIMEOUT_MS);
+      const resp = await fetch(API_CONFIG.ENDPOINT_COMPROBANTE_EMAIL_REAL, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      const data = await resp.json().catch(()=>null);
+      return {
+        ok: !!(data && data.success),
+        demo: false,
+        mensaje: (data && data.message) || (data && data.success ? 'Comprobante enviado correctamente.' : 'No pudimos enviar el comprobante. Intenta nuevamente.')
+      };
+    } catch(e){
+      // No exponer detalles técnicos ni de SMTP al usuario.
+      return {ok:false, demo:false, mensaje:'No pudimos enviar el comprobante. Intenta nuevamente.'};
     }
-
-    // MODO DEMOSTRACIÓN: el backend/servicio de correo todavía no está conectado.
-    // Importante: nunca se debe indicar que el correo fue enviado si no ocurrió realmente.
-    await simularRed(null, 500);
-    return {ok:false, demo:true, mensaje:'El servicio de correo todavía no está conectado al servidor.'};
   }
 };
 

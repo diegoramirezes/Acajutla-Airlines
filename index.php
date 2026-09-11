@@ -1747,8 +1747,10 @@ const Vistas = {
       <p class="seccion-sub">Elige un asiento por cada pasajero, para cada segmento de vuelo</p>
       <div class="segmento-tabs" id="segmentoTabs">
         ${Estado.segmentos.map((s,i)=>{
-          const ruta = Util.rutaPorId(s.vuelo.ruta_id);
-          const o=Util.aeropuertoPorId(ruta.origen_id), d=Util.aeropuertoPorId(ruta.destino_id);
+          const esReal = !!s.vuelo.origen && !!s.vuelo.destino;
+          const ruta = esReal ? null : Util.rutaPorId(s.vuelo.ruta_id);
+          const o = esReal ? s.vuelo.origen  : Util.aeropuertoPorId(ruta.origen_id);
+          const d = esReal ? s.vuelo.destino : Util.aeropuertoPorId(ruta.destino_id);
           return `<button class="segmento-tab ${i===Asientos.segmentoActual?'activo':''}" onclick="Asientos.irSegmento(${i})">${s.tipo==='IDA'?'Ida':'Regreso'} · ${o.codigo_iata}-${d.codigo_iata}</button>`;
         }).join('')}
       </div>

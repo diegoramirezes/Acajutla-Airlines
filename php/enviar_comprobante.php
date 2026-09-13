@@ -34,18 +34,24 @@
  *   - NO se inserta en reservations/customers/passengers/flight_segments/
  *     payments/dte_headers/dte_items. Únicamente email_outbox.
  *   - NO se usa PHPMailer ni Composer.
- *   - El envío real se hace vía Resend API HTTPS (POST
- *     https://api.resend.com/emails). Ya no se usa Brevo ni SMTP directo.
+ *   - El envío real se hace vía SMTP2GO API HTTPS (POST
+ *     https://api.smtp2go.com/v3/email/send). Ya no se usa Resend, Brevo
+ *     ni SMTP directo. Se eligió SMTP2GO porque permite verificar un
+ *     único correo remitente (sin comprar/verificar un dominio) y, una
+ *     vez verificado, enviar a CUALQUIER destinatario arbitrario sin
+ *     agregarlo manualmente a ninguna lista — a diferencia del sandbox
+ *     de Resend (onboarding@resend.dev, solo al correo de la cuenta) o
+ *     el sandbox de Mailgun (requiere autorizar cada destinatario).
  *     Se usa cURL si está disponible en el entorno; si no, se hace
  *     fallback a file_get_contents() con contexto HTTPS (stream wrapper
  *     nativo de PHP, sin dependencias).
- *   - Credenciales SOLO por variables de entorno: RESEND_API_KEY,
- *     RESEND_SENDER_EMAIL, RESEND_SENDER_NAME. Nunca escritas aquí.
+ *   - Credenciales SOLO por variables de entorno: SMTP2GO_API_KEY,
+ *     SMTP2GO_SENDER_EMAIL, SMTP2GO_SENDER_NAME. Nunca escritas aquí.
  *   - NOTA: la columna email_outbox.brevo_message_id se sigue usando tal
  *     cual (sin migración de esquema, según regla del proyecto de no
- *     tocar la BD) para guardar el ID que devuelve Resend. El nombre de
- *     la columna es historia previa (cuando se usaba Brevo); su contenido
- *     ahora es el message id real de Resend.
+ *     tocar la BD) para guardar el email_id que devuelve SMTP2GO. El
+ *     nombre de la columna es historia previa (cuando se usaba Brevo);
+ *     su contenido ahora es el identificador real de SMTP2GO.
  *
  * Respuesta: siempre JSON.
  *   Éxito: {"success":true,"message":"Comprobante enviado correctamente."}
@@ -57,9 +63,9 @@
 header('Content-Type: application/json; charset=utf-8');
 
 // -----------------------------------------------------------------------
-// 0. Config Resend — SOLO desde variables de entorno. Nunca hardcodeadas.
+// 0. Config SMTP2GO — SOLO desde variables de entorno. Nunca hardcodeadas.
 // -----------------------------------------------------------------------
-const RESEND_API_URL = 'https://api.resend.com/emails';
+const SMTP2GO_API_URL = 'https://api.smtp2go.com/v3/email/send';
 
 function responderJson($codigoHttp, $body){
     http_response_code($codigoHttp);
@@ -265,16 +271,16 @@ $emailOutboxId = mysqli_insert_id($conexion);
 mysqli_stmt_close($stmtInsert);
 
 // -----------------------------------------------------------------------
-// 6. Intentar el envío real vía Resend API (HTTPS), NO SMTP, NO Brevo
+// 6. Intentar el envío real vía SMTP2GO API (HTTPS), NO SMTP, NO Resend/Brevo
 // -----------------------------------------------------------------------
-function actualizarEstadoEnvio($conexion, $id, $status, $errorMsg = null, $resendMessageId = null){
+function actualizarEstadoEnvio($conexion, $id, $status, $errorMsg = null, $smtp2goEmailId = null){
     if($status === 'sent'){
         // NOTA: la columna se sigue llamando brevo_message_id (no se migra
-        // el esquema), pero ahora guarda el message id real de Resend.
+        // el esquema), pero ahora guarda el email_id real de SMTP2GO.
         $sql = "UPDATE email_outbox SET status='sent', sent_at=NOW(), error_msg=NULL, brevo_message_id=? WHERE id=?";
         $stmt = mysqli_prepare($conexion, $sql);
         if($stmt){
-            mysqli_stmt_bind_param($stmt, 'si', $resendMessageId, $id);
+            mysqli_stmt_bind_param($stmt, 'si', $smtp2goEmailId, $id);
             mysqli_stmt_execute($stmt);
             mysqli_stmt_close($stmt);
         }
@@ -358,71 +364,77 @@ function postJsonHttps($url, array $headers, $cuerpoJson){
 }
 
 /**
- * Envía un correo HTML vía Resend API (POST https://api.resend.com/emails,
- * HTTPS). NO usa SMTP, fsockopen, STARTTLS, AUTH LOGIN ni Brevo.
- * Autenticación: header "Authorization: Bearer {RESEND_API_KEY}".
- * Devuelve el id que entrega Resend (string) si el envío fue realmente
- * exitoso (HTTP 2xx Y un id presente en la respuesta). Lanza Exception
- * con detalle técnico en caso contrario (el caller decide qué guardar en
- * email_outbox.error_msg y qué mostrar al usuario).
+ * Envía un correo HTML vía SMTP2GO API (POST
+ * https://api.smtp2go.com/v3/email/send, HTTPS). NO usa SMTP, fsockopen,
+ * STARTTLS, AUTH LOGIN, Resend ni Brevo.
+ * Autenticación: header "X-Smtp2go-Api-Key: {SMTP2GO_API_KEY}".
+ * Devuelve el email_id que entrega SMTP2GO (string) si el envío fue
+ * realmente exitoso (HTTP 2xx Y data.succeeded >= 1 Y un email_id
+ * presente en la respuesta, sin fallos reportados en data.failures).
+ * Lanza Exception con detalle técnico en caso contrario (el caller
+ * decide qué guardar en email_outbox.error_msg y qué mostrar al usuario).
  */
-function enviarCorreoResend($apiKey, $nombreRemitente, $emailRemitente, $destinatario, $asunto, $htmlBody){
+function enviarCorreoSmtp2Go($apiKey, $nombreRemitente, $emailRemitente, $destinatario, $asunto, $htmlBody){
     $cuerpo = [
-        'from'    => $nombreRemitente . ' <' . $emailRemitente . '>',
-        'to'      => [$destinatario],
-        'subject' => $asunto,
-        'html'    => $htmlBody,
+        'sender'    => $nombreRemitente . ' <' . $emailRemitente . '>',
+        'to'        => [$destinatario],
+        'subject'   => $asunto,
+        'html_body' => $htmlBody,
     ];
     $cuerpoJson = json_encode($cuerpo, JSON_UNESCAPED_UNICODE);
 
     $headers = [
         'Content-Type: application/json',
-        'Authorization: Bearer ' . $apiKey,
+        'X-Smtp2go-Api-Key: ' . $apiKey,
+        'Accept: application/json',
     ];
 
-    $respuesta = postJsonHttps(RESEND_API_URL, $headers, $cuerpoJson);
+    $respuesta = postJsonHttps(SMTP2GO_API_URL, $headers, $cuerpoJson);
     $codigoHttp = $respuesta['codigo'];
     $cuerpoRespuesta = $respuesta['cuerpo'];
 
     $datos = json_decode((string)$cuerpoRespuesta, true);
 
     if($codigoHttp < 200 || $codigoHttp >= 300){
-        // Nunca se expone el cuerpo de la respuesta de Resend (puede incluir
+        // Nunca se expone el cuerpo de la respuesta de SMTP2GO (puede incluir
         // detalles internos) al frontend; solo queda registrado internamente.
-        throw new Exception('Resend respondió HTTP ' . $codigoHttp . ': ' . substr((string)$cuerpoRespuesta, 0, 500));
+        throw new Exception('SMTP2GO respondió HTTP ' . $codigoHttp . ': ' . substr((string)$cuerpoRespuesta, 0, 500));
     }
 
-    // Aunque el HTTP sea 2xx, solo se considera realmente exitoso si Resend
-    // entrega un id de mensaje válido en la respuesta.
-    $messageId = (is_array($datos) && isset($datos['id']) && is_string($datos['id']) && $datos['id'] !== '')
-        ? $datos['id']
+    $datosEnvio = (is_array($datos) && isset($datos['data']) && is_array($datos['data'])) ? $datos['data'] : null;
+    $succeeded = $datosEnvio && isset($datosEnvio['succeeded']) ? (int)$datosEnvio['succeeded'] : 0;
+    $failed = $datosEnvio && isset($datosEnvio['failed']) ? (int)$datosEnvio['failed'] : 0;
+    $emailId = ($datosEnvio && isset($datosEnvio['email_id']) && is_string($datosEnvio['email_id']) && $datosEnvio['email_id'] !== '')
+        ? $datosEnvio['email_id']
         : null;
 
-    if($messageId === null){
-        throw new Exception('Resend respondió HTTP ' . $codigoHttp . ' pero sin un id de mensaje válido: ' . substr((string)$cuerpoRespuesta, 0, 500));
+    // Aunque el HTTP sea 2xx, solo se considera realmente exitoso si SMTP2GO
+    // confirma al menos un envío logrado, sin fallos, y con un email_id válido.
+    if($succeeded < 1 || $failed > 0 || $emailId === null){
+        throw new Exception('SMTP2GO respondió HTTP ' . $codigoHttp . ' pero sin confirmar el envío: ' . substr((string)$cuerpoRespuesta, 0, 500));
     }
 
-    return $messageId;
+    return $emailId;
 }
 
-$resendApiKey = getenv('RESEND_API_KEY');
-$resendSenderEmail = getenv('RESEND_SENDER_EMAIL');
-$resendSenderName = getenv('RESEND_SENDER_NAME') ?: 'Acajutla Airlines';
+$smtp2goApiKey = getenv('SMTP2GO_API_KEY');
+$smtp2goSenderEmail = getenv('SMTP2GO_SENDER_EMAIL');
+$smtp2goSenderName = getenv('SMTP2GO_SENDER_NAME') ?: 'Acajutla Airlines';
 
-if(!$resendApiKey || !$resendSenderEmail || !filter_var($resendSenderEmail, FILTER_VALIDATE_EMAIL)){
-    actualizarEstadoEnvio($conexion, $emailOutboxId, 'failed', 'RESEND_API_KEY / RESEND_SENDER_EMAIL no configurados correctamente en el entorno del servidor.');
+if(!$smtp2goApiKey || !$smtp2goSenderEmail || !filter_var($smtp2goSenderEmail, FILTER_VALIDATE_EMAIL)){
+    actualizarEstadoEnvio($conexion, $emailOutboxId, 'failed', 'SMTP2GO_API_KEY / SMTP2GO_SENDER_EMAIL no configurados correctamente en el entorno del servidor.');
     cerrarConexion();
     responderJson(500, ['success' => false, 'message' => 'No pudimos enviar el comprobante. Intenta nuevamente.']);
 }
 
 try{
-    $resendMessageId = enviarCorreoResend($resendApiKey, $resendSenderName, $resendSenderEmail, $email, $asunto, $htmlCorreo);
-    actualizarEstadoEnvio($conexion, $emailOutboxId, 'sent', null, $resendMessageId);
+    $smtp2goEmailId = enviarCorreoSmtp2Go($smtp2goApiKey, $smtp2goSenderName, $smtp2goSenderEmail, $email, $asunto, $htmlCorreo);
+    actualizarEstadoEnvio($conexion, $emailOutboxId, 'sent', null, $smtp2goEmailId);
     cerrarConexion();
     responderJson(200, ['success' => true, 'message' => 'Comprobante enviado correctamente.']);
 } catch(Exception $e){
     // El detalle técnico se guarda internamente; al frontend nunca se expone.
-    error_log('[Acajutla Airlines] Error de envío vía Resend API: ' . $e->getMessage());
+    error_log('[Acajutla Airlines] Error de envío vía SMTP2GO API: ' . $e->getMessage());
     actualizarEstadoEnvio($conexion, $emailOutboxId, 'failed', $e->getMessage());
     cerrarConexion();
     responderJson(500, ['success' => false, 'message' => 'No pudimos enviar el comprobante. Intenta nuevamente.']);

@@ -34,24 +34,20 @@
  *   - NO se inserta en reservations/customers/passengers/flight_segments/
  *     payments/dte_headers/dte_items. Únicamente email_outbox.
  *   - NO se usa PHPMailer ni Composer.
- *   - El envío real se hace vía SMTP2GO API HTTPS (POST
- *     https://api.smtp2go.com/v3/email/send). Ya no se usa Resend, Brevo
- *     ni SMTP directo. Se eligió SMTP2GO porque permite verificar un
- *     único correo remitente (sin comprar/verificar un dominio) y, una
- *     vez verificado, enviar a CUALQUIER destinatario arbitrario sin
- *     agregarlo manualmente a ninguna lista — a diferencia del sandbox
- *     de Resend (onboarding@resend.dev, solo al correo de la cuenta) o
- *     el sandbox de Mailgun (requiere autorizar cada destinatario).
- *     Se usa cURL si está disponible en el entorno; si no, se hace
- *     fallback a file_get_contents() con contexto HTTPS (stream wrapper
- *     nativo de PHP, sin dependencias).
- *   - Credenciales SOLO por variables de entorno: SMTP2GO_API_KEY,
- *     SMTP2GO_SENDER_EMAIL, SMTP2GO_SENDER_NAME. Nunca escritas aquí.
+ *   - El envío real se hace vía Nylas Email API v3 (POST
+ *     https://api.us.nylas.com/v3/grants/{grant_id}/messages/send), usando
+ *     una cuenta Gmail ya conectada a Nylas mediante OAuth (Grant ID ya
+ *     generado y probado). Ya no se usa SMTP2GO, Resend, Brevo ni SMTP
+ *     directo. Se usa cURL si está disponible en el entorno; si no, se
+ *     hace fallback a file_get_contents() con contexto HTTPS (stream
+ *     wrapper nativo de PHP, sin dependencias).
+ *   - Credenciales SOLO por variables de entorno: NYLAS_API_KEY,
+ *     NYLAS_GRANT_ID. Nunca escritas aquí.
  *   - NOTA: la columna email_outbox.brevo_message_id se sigue usando tal
  *     cual (sin migración de esquema, según regla del proyecto de no
- *     tocar la BD) para guardar el email_id que devuelve SMTP2GO. El
- *     nombre de la columna es historia previa (cuando se usaba Brevo);
- *     su contenido ahora es el identificador real de SMTP2GO.
+ *     tocar la BD) para guardar el id del mensaje que devuelve Nylas
+ *     (data.id). El nombre de la columna es historia previa (cuando se
+ *     usaba Brevo); su contenido ahora es el identificador real de Nylas.
  *
  * Respuesta: siempre JSON.
  *   Éxito: {"success":true,"message":"Comprobante enviado correctamente."}
@@ -63,9 +59,9 @@
 header('Content-Type: application/json; charset=utf-8');
 
 // -----------------------------------------------------------------------
-// 0. Config SMTP2GO — SOLO desde variables de entorno. Nunca hardcodeadas.
+// 0. Config Nylas — SOLO desde variables de entorno. Nunca hardcodeadas.
 // -----------------------------------------------------------------------
-const SMTP2GO_API_URL = 'https://api.smtp2go.com/v3/email/send';
+const NYLAS_API_BASE = 'https://api.us.nylas.com/v3';
 
 function responderJson($codigoHttp, $body){
     http_response_code($codigoHttp);
@@ -271,16 +267,16 @@ $emailOutboxId = mysqli_insert_id($conexion);
 mysqli_stmt_close($stmtInsert);
 
 // -----------------------------------------------------------------------
-// 6. Intentar el envío real vía SMTP2GO API (HTTPS), NO SMTP, NO Resend/Brevo
+// 6. Intentar el envío real vía Nylas Email API v3 (HTTPS), NO SMTP2GO
 // -----------------------------------------------------------------------
-function actualizarEstadoEnvio($conexion, $id, $status, $errorMsg = null, $smtp2goEmailId = null){
+function actualizarEstadoEnvio($conexion, $id, $status, $errorMsg = null, $nylasMessageId = null){
     if($status === 'sent'){
         // NOTA: la columna se sigue llamando brevo_message_id (no se migra
-        // el esquema), pero ahora guarda el email_id real de SMTP2GO.
+        // el esquema), pero ahora guarda el id del mensaje real de Nylas.
         $sql = "UPDATE email_outbox SET status='sent', sent_at=NOW(), error_msg=NULL, brevo_message_id=? WHERE id=?";
         $stmt = mysqli_prepare($conexion, $sql);
         if($stmt){
-            mysqli_stmt_bind_param($stmt, 'si', $smtp2goEmailId, $id);
+            mysqli_stmt_bind_param($stmt, 'si', $nylasMessageId, $id);
             mysqli_stmt_execute($stmt);
             mysqli_stmt_close($stmt);
         }
@@ -302,11 +298,13 @@ function actualizarEstadoEnvio($conexion, $id, $status, $errorMsg = null, $smtp2
  * fallback a file_get_contents() con un stream context HTTPS, que es
  * parte del núcleo de PHP y no requiere ninguna extensión adicional
  * ni tocar el Dockerfile.
+ * $timeoutSegundos es configurable porque Nylas recomienda un timeout
+ * de cliente de al menos 150s para POST /messages/send.
  * Devuelve ['codigo' => int, 'cuerpo' => string|false].
  * Lanza Exception solo si NINGÚN mecanismo de transporte está disponible
  * o si la conexión de red falla por completo (timeout, DNS, etc.).
  */
-function postJsonHttps($url, array $headers, $cuerpoJson){
+function postJsonHttps($url, array $headers, $cuerpoJson, $timeoutSegundos = 15){
     if(function_exists('curl_init')){
         $ch = curl_init($url);
         curl_setopt_array($ch, [
@@ -314,7 +312,7 @@ function postJsonHttps($url, array $headers, $cuerpoJson){
             CURLOPT_POSTFIELDS => $cuerpoJson,
             CURLOPT_HTTPHEADER => $headers,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 15,
+            CURLOPT_TIMEOUT => $timeoutSegundos,
             CURLOPT_CONNECTTIMEOUT => 10,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
@@ -337,7 +335,7 @@ function postJsonHttps($url, array $headers, $cuerpoJson){
             'method'  => 'POST',
             'header'  => implode("\r\n", $headers),
             'content' => $cuerpoJson,
-            'timeout' => 15,
+            'timeout' => $timeoutSegundos,
             'ignore_errors' => true, // para poder leer el cuerpo también en 4xx/5xx
         ],
         'ssl' => [
@@ -364,77 +362,76 @@ function postJsonHttps($url, array $headers, $cuerpoJson){
 }
 
 /**
- * Envía un correo HTML vía SMTP2GO API (POST
- * https://api.smtp2go.com/v3/email/send, HTTPS). NO usa SMTP, fsockopen,
- * STARTTLS, AUTH LOGIN, Resend ni Brevo.
- * Autenticación: header "X-Smtp2go-Api-Key: {SMTP2GO_API_KEY}".
- * Devuelve el email_id que entrega SMTP2GO (string) si el envío fue
- * realmente exitoso (HTTP 2xx Y data.succeeded >= 1 Y un email_id
- * presente en la respuesta, sin fallos reportados en data.failures).
- * Lanza Exception con detalle técnico en caso contrario (el caller
- * decide qué guardar en email_outbox.error_msg y qué mostrar al usuario).
+ * Envía un correo HTML vía Nylas Email API v3 (POST
+ * https://api.us.nylas.com/v3/grants/{grant_id}/messages/send, HTTPS).
+ * NO usa SMTP, fsockopen, STARTTLS, AUTH LOGIN, SMTP2GO, Resend ni Brevo.
+ * Autenticación: header "Authorization: Bearer {NYLAS_API_KEY}".
+ * El remitente es la cuenta Gmail ya conectada al Grant (no se envía un
+ * campo "from": Nylas usa automáticamente la cuenta del grant).
+ * Devuelve el id del mensaje (string) que entrega Nylas en data.id si el
+ * envío fue realmente exitoso (HTTP 2xx Y un id presente en la respuesta).
+ * Lanza Exception con detalle técnico en caso contrario (el caller decide
+ * qué guardar en email_outbox.error_msg y qué mostrar al usuario).
  */
-function enviarCorreoSmtp2Go($apiKey, $nombreRemitente, $emailRemitente, $destinatario, $asunto, $htmlBody){
+function enviarCorreoNylas($apiKey, $grantId, $destinatario, $asunto, $htmlBody){
     $cuerpo = [
-        'sender'    => $nombreRemitente . ' <' . $emailRemitente . '>',
-        'to'        => [$destinatario],
-        'subject'   => $asunto,
-        'html_body' => $htmlBody,
+        'subject' => $asunto,
+        'to'      => [['email' => $destinatario]],
+        'body'    => $htmlBody,
     ];
     $cuerpoJson = json_encode($cuerpo, JSON_UNESCAPED_UNICODE);
 
     $headers = [
         'Content-Type: application/json',
-        'X-Smtp2go-Api-Key: ' . $apiKey,
-        'Accept: application/json',
+        'Authorization: Bearer ' . $apiKey,
     ];
 
-    $respuesta = postJsonHttps(SMTP2GO_API_URL, $headers, $cuerpoJson);
+    $url = NYLAS_API_BASE . '/grants/' . rawurlencode($grantId) . '/messages/send';
+
+    // Nylas recomienda un timeout de cliente de al menos 150s para este endpoint.
+    $respuesta = postJsonHttps($url, $headers, $cuerpoJson, 160);
     $codigoHttp = $respuesta['codigo'];
     $cuerpoRespuesta = $respuesta['cuerpo'];
 
     $datos = json_decode((string)$cuerpoRespuesta, true);
 
     if($codigoHttp < 200 || $codigoHttp >= 300){
-        // Nunca se expone el cuerpo de la respuesta de SMTP2GO (puede incluir
+        // Nunca se expone el cuerpo de la respuesta de Nylas (puede incluir
         // detalles internos) al frontend; solo queda registrado internamente.
-        throw new Exception('SMTP2GO respondió HTTP ' . $codigoHttp . ': ' . substr((string)$cuerpoRespuesta, 0, 500));
+        throw new Exception('Nylas respondió HTTP ' . $codigoHttp . ': ' . substr((string)$cuerpoRespuesta, 0, 500));
     }
 
     $datosEnvio = (is_array($datos) && isset($datos['data']) && is_array($datos['data'])) ? $datos['data'] : null;
-    $succeeded = $datosEnvio && isset($datosEnvio['succeeded']) ? (int)$datosEnvio['succeeded'] : 0;
-    $failed = $datosEnvio && isset($datosEnvio['failed']) ? (int)$datosEnvio['failed'] : 0;
-    $emailId = ($datosEnvio && isset($datosEnvio['email_id']) && is_string($datosEnvio['email_id']) && $datosEnvio['email_id'] !== '')
-        ? $datosEnvio['email_id']
+    $mensajeId = ($datosEnvio && isset($datosEnvio['id']) && is_string($datosEnvio['id']) && $datosEnvio['id'] !== '')
+        ? $datosEnvio['id']
         : null;
 
-    // Aunque el HTTP sea 2xx, solo se considera realmente exitoso si SMTP2GO
-    // confirma al menos un envío logrado, sin fallos, y con un email_id válido.
-    if($succeeded < 1 || $failed > 0 || $emailId === null){
-        throw new Exception('SMTP2GO respondió HTTP ' . $codigoHttp . ' pero sin confirmar el envío: ' . substr((string)$cuerpoRespuesta, 0, 500));
+    // Aunque el HTTP sea 2xx, solo se considera realmente exitoso si Nylas
+    // entrega un id de mensaje válido en la respuesta.
+    if($mensajeId === null){
+        throw new Exception('Nylas respondió HTTP ' . $codigoHttp . ' pero sin un id de mensaje válido: ' . substr((string)$cuerpoRespuesta, 0, 500));
     }
 
-    return $emailId;
+    return $mensajeId;
 }
 
-$smtp2goApiKey = getenv('SMTP2GO_API_KEY');
-$smtp2goSenderEmail = getenv('SMTP2GO_SENDER_EMAIL');
-$smtp2goSenderName = getenv('SMTP2GO_SENDER_NAME') ?: 'Acajutla Airlines';
+$nylasApiKey = getenv('NYLAS_API_KEY');
+$nylasGrantId = getenv('NYLAS_GRANT_ID');
 
-if(!$smtp2goApiKey || !$smtp2goSenderEmail || !filter_var($smtp2goSenderEmail, FILTER_VALIDATE_EMAIL)){
-    actualizarEstadoEnvio($conexion, $emailOutboxId, 'failed', 'SMTP2GO_API_KEY / SMTP2GO_SENDER_EMAIL no configurados correctamente en el entorno del servidor.');
+if(!$nylasApiKey || !$nylasGrantId){
+    actualizarEstadoEnvio($conexion, $emailOutboxId, 'failed', 'NYLAS_API_KEY / NYLAS_GRANT_ID no configurados correctamente en el entorno del servidor.');
     cerrarConexion();
     responderJson(500, ['success' => false, 'message' => 'No pudimos enviar el comprobante. Intenta nuevamente.']);
 }
 
 try{
-    $smtp2goEmailId = enviarCorreoSmtp2Go($smtp2goApiKey, $smtp2goSenderName, $smtp2goSenderEmail, $email, $asunto, $htmlCorreo);
-    actualizarEstadoEnvio($conexion, $emailOutboxId, 'sent', null, $smtp2goEmailId);
+    $nylasMessageId = enviarCorreoNylas($nylasApiKey, $nylasGrantId, $email, $asunto, $htmlCorreo);
+    actualizarEstadoEnvio($conexion, $emailOutboxId, 'sent', null, $nylasMessageId);
     cerrarConexion();
     responderJson(200, ['success' => true, 'message' => 'Comprobante enviado correctamente.']);
 } catch(Exception $e){
     // El detalle técnico se guarda internamente; al frontend nunca se expone.
-    error_log('[Acajutla Airlines] Error de envío vía SMTP2GO API: ' . $e->getMessage());
+    error_log('[Acajutla Airlines] Error de envío vía Nylas Email API: ' . $e->getMessage());
     actualizarEstadoEnvio($conexion, $emailOutboxId, 'failed', $e->getMessage());
     cerrarConexion();
     responderJson(500, ['success' => false, 'message' => 'No pudimos enviar el comprobante. Intenta nuevamente.']);

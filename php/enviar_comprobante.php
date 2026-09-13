@@ -33,9 +33,19 @@
  * IMPORTANTE (alcance de esta etapa, ver REGLAS_PROYECTO.md):
  *   - NO se inserta en reservations/customers/passengers/flight_segments/
  *     payments/dte_headers/dte_items. Únicamente email_outbox.
- *   - NO se usa PHPMailer ni Composer: cliente SMTP nativo por sockets.
- *   - Las credenciales SMTP se leen SOLO de variables de entorno
- *     (SMTP_USER, SMTP_PASSWORD), nunca se escriben en este archivo.
+ *   - NO se usa PHPMailer ni Composer.
+ *   - El envío real se hace vía Resend API HTTPS (POST
+ *     https://api.resend.com/emails). Ya no se usa Brevo ni SMTP directo.
+ *     Se usa cURL si está disponible en el entorno; si no, se hace
+ *     fallback a file_get_contents() con contexto HTTPS (stream wrapper
+ *     nativo de PHP, sin dependencias).
+ *   - Credenciales SOLO por variables de entorno: RESEND_API_KEY,
+ *     RESEND_SENDER_EMAIL, RESEND_SENDER_NAME. Nunca escritas aquí.
+ *   - NOTA: la columna email_outbox.brevo_message_id se sigue usando tal
+ *     cual (sin migración de esquema, según regla del proyecto de no
+ *     tocar la BD) para guardar el ID que devuelve Resend. El nombre de
+ *     la columna es historia previa (cuando se usaba Brevo); su contenido
+ *     ahora es el message id real de Resend.
  *
  * Respuesta: siempre JSON.
  *   Éxito: {"success":true,"message":"Comprobante enviado correctamente."}
@@ -47,11 +57,9 @@
 header('Content-Type: application/json; charset=utf-8');
 
 // -----------------------------------------------------------------------
-// 0. Config SMTP — SOLO desde variables de entorno. Nunca hardcodeadas.
+// 0. Config Resend — SOLO desde variables de entorno. Nunca hardcodeadas.
 // -----------------------------------------------------------------------
-const SMTP_HOST = 'smtp.gmail.com';
-const SMTP_PORT = 587;
-const SMTP_REMITENTE_NOMBRE = 'Acajutla Airlines';
+const RESEND_API_URL = 'https://api.resend.com/emails';
 
 function responderJson($codigoHttp, $body){
     http_response_code($codigoHttp);
@@ -90,7 +98,7 @@ function textoSeguro($v, $maxLen = 200){
     $v = trim($v);
     // Elimina saltos de línea / retorno de carro (evita header injection más adelante)
     $v = str_replace(["\r", "\n"], ' ', $v);
-    if($v === '' || mb_strlen($v) > $maxLen) return null;
+    if($v === '' || strlen($v) > $maxLen) return null;
     return $v;
 }
 
@@ -235,7 +243,7 @@ $asunto = 'Acajutla Airlines - Comprobante de reserva ' . $pnr;
 require_once __DIR__ . '/conexion.php';
 
 if(!CONEXION_OK){
-    responderJson(500, ['success' => false, 'message' => 'No fue posible enviar el comprobante por correo.']);
+    responderJson(500, ['success' => false, 'message' => 'No pudimos enviar el comprobante. Intenta nuevamente.']);
 }
 
 $sqlInsert = "INSERT INTO email_outbox (template, to_email, subject, html, ref_type, ref_id, status)
@@ -244,31 +252,37 @@ $stmtInsert = mysqli_prepare($conexion, $sqlInsert);
 if(!$stmtInsert){
     error_log('[Acajutla Airlines] Error al preparar INSERT en email_outbox: ' . mysqli_error($conexion));
     cerrarConexion();
-    responderJson(500, ['success' => false, 'message' => 'No fue posible enviar el comprobante por correo.']);
+    responderJson(500, ['success' => false, 'message' => 'No pudimos enviar el comprobante. Intenta nuevamente.']);
 }
 mysqli_stmt_bind_param($stmtInsert, 'ssss', $email, $asunto, $htmlCorreo, $pnr);
 if(!mysqli_stmt_execute($stmtInsert)){
     error_log('[Acajutla Airlines] Error al insertar en email_outbox: ' . mysqli_stmt_error($stmtInsert));
     mysqli_stmt_close($stmtInsert);
     cerrarConexion();
-    responderJson(500, ['success' => false, 'message' => 'No fue posible enviar el comprobante por correo.']);
+    responderJson(500, ['success' => false, 'message' => 'No pudimos enviar el comprobante. Intenta nuevamente.']);
 }
 $emailOutboxId = mysqli_insert_id($conexion);
 mysqli_stmt_close($stmtInsert);
 
 // -----------------------------------------------------------------------
-// 6. Intentar el envío SMTP real (Gmail, STARTTLS, AUTH LOGIN)
+// 6. Intentar el envío real vía Resend API (HTTPS), NO SMTP, NO Brevo
 // -----------------------------------------------------------------------
-function actualizarEstadoEnvio($conexion, $id, $status, $errorMsg = null){
+function actualizarEstadoEnvio($conexion, $id, $status, $errorMsg = null, $resendMessageId = null){
     if($status === 'sent'){
-        $sql = "UPDATE email_outbox SET status='sent', sent_at=NOW(), error_msg=NULL WHERE id=?";
+        // NOTA: la columna se sigue llamando brevo_message_id (no se migra
+        // el esquema), pero ahora guarda el message id real de Resend.
+        $sql = "UPDATE email_outbox SET status='sent', sent_at=NOW(), error_msg=NULL, brevo_message_id=? WHERE id=?";
         $stmt = mysqli_prepare($conexion, $sql);
-        if($stmt){ mysqli_stmt_bind_param($stmt, 'i', $id); mysqli_stmt_execute($stmt); mysqli_stmt_close($stmt); }
+        if($stmt){
+            mysqli_stmt_bind_param($stmt, 'si', $resendMessageId, $id);
+            mysqli_stmt_execute($stmt);
+            mysqli_stmt_close($stmt);
+        }
     } else {
         $sql = "UPDATE email_outbox SET status='failed', error_msg=? WHERE id=?";
         $stmt = mysqli_prepare($conexion, $sql);
         if($stmt){
-            $errorMsgRecortado = $errorMsg !== null ? mb_substr((string)$errorMsg, 0, 1000) : 'Error desconocido.';
+            $errorMsgRecortado = $errorMsg !== null ? substr((string)$errorMsg, 0, 1000) : 'Error desconocido.';
             mysqli_stmt_bind_param($stmt, 'si', $errorMsgRecortado, $id);
             mysqli_stmt_execute($stmt);
             mysqli_stmt_close($stmt);
@@ -277,116 +291,139 @@ function actualizarEstadoEnvio($conexion, $id, $status, $errorMsg = null){
 }
 
 /**
- * Lee una respuesta SMTP completa (soporta líneas multilínea "250-...").
- * Devuelve el texto completo recibido.
+ * Hace un POST HTTPS con cuerpo JSON. Usa cURL si la extensión está
+ * cargada en el entorno (function_exists('curl_init')); si no, hace
+ * fallback a file_get_contents() con un stream context HTTPS, que es
+ * parte del núcleo de PHP y no requiere ninguna extensión adicional
+ * ni tocar el Dockerfile.
+ * Devuelve ['codigo' => int, 'cuerpo' => string|false].
+ * Lanza Exception solo si NINGÚN mecanismo de transporte está disponible
+ * o si la conexión de red falla por completo (timeout, DNS, etc.).
  */
-function smtpLeerRespuesta($socket){
-    $respuesta = '';
-    while(!feof($socket)){
-        $linea = fgets($socket, 515);
-        if($linea === false) break;
-        $respuesta .= $linea;
-        // Una línea de continuación tiene un guion en la 4ta posición (ej. "250-"),
-        // la última línea de la respuesta tiene un espacio (ej. "250 ").
-        if(isset($linea[3]) && $linea[3] === ' ') break;
+function postJsonHttps($url, array $headers, $cuerpoJson){
+    if(function_exists('curl_init')){
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $cuerpoJson,
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 15,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ]);
+        $cuerpoRespuesta = curl_exec($ch);
+        if($cuerpoRespuesta === false){
+            $error = curl_error($ch);
+            curl_close($ch);
+            throw new Exception('Fallo de conexión (cURL) hacia el servicio de correo: ' . $error);
+        }
+        $codigoHttp = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        return ['codigo' => (int)$codigoHttp, 'cuerpo' => $cuerpoRespuesta];
     }
-    return $respuesta;
-}
 
-function smtpEnviarComando($socket, $comando, $codigoEsperado){
-    fwrite($socket, $comando . "\r\n");
-    $respuesta = smtpLeerRespuesta($socket);
-    $codigo = substr($respuesta, 0, 3);
-    if($codigo !== $codigoEsperado){
-        throw new Exception('SMTP inesperado. Esperado ' . $codigoEsperado . ', recibido: ' . trim($respuesta));
+    // Fallback sin cURL: file_get_contents con stream context HTTPS
+    // (wrapper nativo de PHP, no requiere extensiones adicionales).
+    $opciones = [
+        'http' => [
+            'method'  => 'POST',
+            'header'  => implode("\r\n", $headers),
+            'content' => $cuerpoJson,
+            'timeout' => 15,
+            'ignore_errors' => true, // para poder leer el cuerpo también en 4xx/5xx
+        ],
+        'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+        ],
+    ];
+    $contexto = stream_context_create($opciones);
+    $cuerpoRespuesta = @file_get_contents($url, false, $contexto);
+
+    if($cuerpoRespuesta === false){
+        throw new Exception('Fallo de conexión (stream HTTPS) hacia el servicio de correo.');
     }
-    return $respuesta;
+
+    $codigoHttp = 0;
+    if(isset($http_response_header) && is_array($http_response_header)){
+        foreach($http_response_header as $cabecera){
+            if(preg_match('#^HTTP/\S+\s+(\d{3})#', $cabecera, $m)){
+                $codigoHttp = (int)$m[1];
+            }
+        }
+    }
+    return ['codigo' => $codigoHttp, 'cuerpo' => $cuerpoRespuesta];
 }
 
 /**
- * Envía un correo HTML vía Gmail SMTP (587, STARTTLS, AUTH LOGIN) usando
- * únicamente sockets nativos de PHP. Sin PHPMailer, sin Composer.
- * Lanza Exception en caso de error (el caller decide qué guardar/mostrar).
+ * Envía un correo HTML vía Resend API (POST https://api.resend.com/emails,
+ * HTTPS). NO usa SMTP, fsockopen, STARTTLS, AUTH LOGIN ni Brevo.
+ * Autenticación: header "Authorization: Bearer {RESEND_API_KEY}".
+ * Devuelve el id que entrega Resend (string) si el envío fue realmente
+ * exitoso (HTTP 2xx Y un id presente en la respuesta). Lanza Exception
+ * con detalle técnico en caso contrario (el caller decide qué guardar en
+ * email_outbox.error_msg y qué mostrar al usuario).
  */
-function enviarCorreoSMTP($host, $puerto, $usuario, $password, $nombreRemitente, $destinatario, $asunto, $htmlBody){
-    $socket = @stream_socket_client("tcp://{$host}:{$puerto}", $errno, $errstr, 15);
-    if(!$socket){
-        throw new Exception('No se pudo conectar al servidor SMTP: ' . $errstr);
+function enviarCorreoResend($apiKey, $nombreRemitente, $emailRemitente, $destinatario, $asunto, $htmlBody){
+    $cuerpo = [
+        'from'    => $nombreRemitente . ' <' . $emailRemitente . '>',
+        'to'      => [$destinatario],
+        'subject' => $asunto,
+        'html'    => $htmlBody,
+    ];
+    $cuerpoJson = json_encode($cuerpo, JSON_UNESCAPED_UNICODE);
+
+    $headers = [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . $apiKey,
+    ];
+
+    $respuesta = postJsonHttps(RESEND_API_URL, $headers, $cuerpoJson);
+    $codigoHttp = $respuesta['codigo'];
+    $cuerpoRespuesta = $respuesta['cuerpo'];
+
+    $datos = json_decode((string)$cuerpoRespuesta, true);
+
+    if($codigoHttp < 200 || $codigoHttp >= 300){
+        // Nunca se expone el cuerpo de la respuesta de Resend (puede incluir
+        // detalles internos) al frontend; solo queda registrado internamente.
+        throw new Exception('Resend respondió HTTP ' . $codigoHttp . ': ' . substr((string)$cuerpoRespuesta, 0, 500));
     }
-    stream_set_timeout($socket, 15);
 
-    $saludo = smtpLeerRespuesta($socket);
-    if(substr($saludo, 0, 3) !== '220'){
-        fclose($socket);
-        throw new Exception('Saludo SMTP inesperado: ' . trim($saludo));
+    // Aunque el HTTP sea 2xx, solo se considera realmente exitoso si Resend
+    // entrega un id de mensaje válido en la respuesta.
+    $messageId = (is_array($datos) && isset($datos['id']) && is_string($datos['id']) && $datos['id'] !== '')
+        ? $datos['id']
+        : null;
+
+    if($messageId === null){
+        throw new Exception('Resend respondió HTTP ' . $codigoHttp . ' pero sin un id de mensaje válido: ' . substr((string)$cuerpoRespuesta, 0, 500));
     }
 
-    $dominioLocal = 'acajutla-airlines.local';
-    smtpEnviarComando($socket, "EHLO {$dominioLocal}", '250');
-
-    smtpEnviarComando($socket, 'STARTTLS', '220');
-
-    $crypto = @stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
-    if(!$crypto){
-        fclose($socket);
-        throw new Exception('No se pudo iniciar TLS con el servidor SMTP.');
-    }
-
-    // Tras STARTTLS es obligatorio volver a saludar.
-    smtpEnviarComando($socket, "EHLO {$dominioLocal}", '250');
-
-    smtpEnviarComando($socket, 'AUTH LOGIN', '334');
-    smtpEnviarComando($socket, base64_encode($usuario), '334');
-    smtpEnviarComando($socket, base64_encode($password), '235');
-
-    smtpEnviarComando($socket, "MAIL FROM:<{$usuario}>", '250');
-    smtpEnviarComando($socket, "RCPT TO:<{$destinatario}>", '250');
-
-    smtpEnviarComando($socket, 'DATA', '354');
-
-    $asuntoCodificado = '=?UTF-8?B?' . base64_encode($asunto) . '?=';
-    $nombreRemitenteCodificado = '=?UTF-8?B?' . base64_encode($nombreRemitente) . '?=';
-
-    // Duplicar cualquier línea que empiece con un punto (escape SMTP estándar,
-    // "dot-stuffing"), requisito del protocolo para no cortar el mensaje.
-    $cuerpoEscapado = str_replace("\n.", "\n..", $htmlBody);
-
-    $mensaje = "From: {$nombreRemitenteCodificado} <{$usuario}>\r\n";
-    $mensaje .= "To: <{$destinatario}>\r\n";
-    $mensaje .= "Subject: {$asuntoCodificado}\r\n";
-    $mensaje .= "MIME-Version: 1.0\r\n";
-    $mensaje .= "Content-Type: text/html; charset=UTF-8\r\n";
-    $mensaje .= "Content-Transfer-Encoding: 8bit\r\n";
-    $mensaje .= "\r\n";
-    $mensaje .= $cuerpoEscapado . "\r\n";
-    $mensaje .= ".";
-
-    smtpEnviarComando($socket, $mensaje, '250');
-
-    fwrite($socket, "QUIT\r\n");
-    fclose($socket);
-
-    return true;
+    return $messageId;
 }
 
-$smtpUser = getenv('SMTP_USER');
-$smtpPassword = getenv('SMTP_PASSWORD');
+$resendApiKey = getenv('RESEND_API_KEY');
+$resendSenderEmail = getenv('RESEND_SENDER_EMAIL');
+$resendSenderName = getenv('RESEND_SENDER_NAME') ?: 'Acajutla Airlines';
 
-if(!$smtpUser || !$smtpPassword){
-    actualizarEstadoEnvio($conexion, $emailOutboxId, 'failed', 'SMTP_USER / SMTP_PASSWORD no configurados en el entorno del servidor.');
+if(!$resendApiKey || !$resendSenderEmail || !filter_var($resendSenderEmail, FILTER_VALIDATE_EMAIL)){
+    actualizarEstadoEnvio($conexion, $emailOutboxId, 'failed', 'RESEND_API_KEY / RESEND_SENDER_EMAIL no configurados correctamente en el entorno del servidor.');
     cerrarConexion();
-    responderJson(500, ['success' => false, 'message' => 'No fue posible enviar el comprobante por correo.']);
+    responderJson(500, ['success' => false, 'message' => 'No pudimos enviar el comprobante. Intenta nuevamente.']);
 }
 
 try{
-    enviarCorreoSMTP(SMTP_HOST, SMTP_PORT, $smtpUser, $smtpPassword, SMTP_REMITENTE_NOMBRE, $email, $asunto, $htmlCorreo);
-    actualizarEstadoEnvio($conexion, $emailOutboxId, 'sent');
+    $resendMessageId = enviarCorreoResend($resendApiKey, $resendSenderName, $resendSenderEmail, $email, $asunto, $htmlCorreo);
+    actualizarEstadoEnvio($conexion, $emailOutboxId, 'sent', null, $resendMessageId);
     cerrarConexion();
     responderJson(200, ['success' => true, 'message' => 'Comprobante enviado correctamente.']);
 } catch(Exception $e){
     // El detalle técnico se guarda internamente; al frontend nunca se expone.
-    error_log('[Acajutla Airlines] Error de envío SMTP: ' . $e->getMessage());
+    error_log('[Acajutla Airlines] Error de envío vía Resend API: ' . $e->getMessage());
     actualizarEstadoEnvio($conexion, $emailOutboxId, 'failed', $e->getMessage());
     cerrarConexion();
-    responderJson(500, ['success' => false, 'message' => 'No fue posible enviar el comprobante por correo.']);
+    responderJson(500, ['success' => false, 'message' => 'No pudimos enviar el comprobante. Intenta nuevamente.']);
 }

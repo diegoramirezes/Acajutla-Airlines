@@ -655,7 +655,11 @@ const API_CONFIG = {
   // comprobante por correo. Es independiente de USE_MOCKS: solo esta
   // función de Api.sendBookingEmail() lo usa; el resto de Api sigue
   // en modo mock hasta que se conecte en una etapa posterior.
-  get ENDPOINT_COMPROBANTE_EMAIL_REAL(){ return this.rutaBaseApp() + 'php/enviar_comprobante.php'; }
+  get ENDPOINT_COMPROBANTE_EMAIL_REAL(){ return this.rutaBaseApp() + 'php/enviar_comprobante.php'; },
+  // Endpoints LOCALES reales para asientos/reservas (independientes de
+  // USE_MOCKS, misma técnica ya usada para el comprobante por correo).
+  get ENDPOINT_ASIENTOS_OCUPADOS_REAL(){ return this.rutaBaseApp() + 'php/asientos_ocupados.php'; },
+  get ENDPOINT_CREAR_RESERVA_REAL(){ return this.rutaBaseApp() + 'php/crear_reserva.php'; }
 };
 
 /* -----------------------------------------------------------------------
@@ -775,7 +779,7 @@ const MOCK = {
 
   precioAsiento: {ECONOMICO:0, PREFERENCIAL:80, EMERGENCIA:80},
 
-  ocupados: {}, // se genera dinámicamente por vuelo (ver Asientos.generarOcupados)
+  ocupados: {}, // no usado: la disponibilidad real ahora viene de php/asientos_ocupados.php (ver Asientos.cargarOcupados)
 
   clientes: [
     {id:1, nombre:'Diego', apellido:'Ramírez', correo:'diego@correo.com', password:'123456', telefono:'7000-1111', documento:'01234567-8'}
@@ -1243,13 +1247,25 @@ const Api = {
   },
 
   async crearReserva(payload){
-    if(API_CONFIG.USE_MOCKS){
-      const pnr = Util.generarPNR();
-      const nueva = {pnr, ...payload, estado:'CONFIRMADA', creado_en: Util.hoyISO()};
-      MOCK.reservas.push(nueva);
-      return simularRed(nueva, 600);
+    // Conectado al backend REAL (php/crear_reserva.php), independiente de
+    // USE_MOCKS (misma técnica ya usada en sendBookingEmail/obtenerAsientos).
+    // Persiste de verdad en reservations/passengers/flight_segments.
+    const resp = await fetch(API_CONFIG.ENDPOINT_CREAR_RESERVA_REAL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await resp.json().catch(()=>null);
+    if(!data || !data.ok){
+      const mensaje = (data && data.error) ? data.error : 'No se pudo completar la reserva. Intenta nuevamente.';
+      throw new Error(mensaje);
     }
-    return apiFetch('/reservas', {method:'POST', body:JSON.stringify(payload)});
+    return {
+      pnr: data.data.pnr,
+      ...payload,
+      estado: 'CONFIRMADA',
+      creado_en: Util.hoyISO()
+    };
   },
 
   async obtenerReserva(pnr, documentoOCorreo){
@@ -1266,8 +1282,25 @@ const Api = {
   },
 
   async obtenerAsientos(vueloId){
-    if(API_CONFIG.USE_MOCKS) return simularRed(Asientos.generarOcupados(vueloId), 350);
-    return apiFetch(`/vuelos/${vueloId}/asientos`);
+    // Conectado al backend REAL (php/asientos_ocupados.php), independiente
+    // de USE_MOCKS, igual que sendBookingEmail(). Fuente de verdad: BD.
+    // IMPORTANTE: nunca devuelve [] ante un fallo — un [] real (vuelo sin
+    // ningún asiento ocupado) sería indistinguible de "no se pudo consultar",
+    // y eso mostraría todos los asientos como libres incorrectamente.
+    // Ante cualquier fallo, lanza Error para que el caller lo sepa con certeza.
+    let resp;
+    try{
+      resp = await fetch(`${API_CONFIG.ENDPOINT_ASIENTOS_OCUPADOS_REAL}?vuelo_id=${encodeURIComponent(vueloId)}`);
+    } catch(e){
+      console.error('obtenerAsientos() falló al consultar el backend real', e);
+      throw new Error('No se pudo consultar la disponibilidad de asientos.');
+    }
+    const data = await resp.json().catch(()=>null);
+    if(data && data.ok && data.data && Array.isArray(data.data.ocupados)){
+      return data.data.ocupados;
+    }
+    console.error('obtenerAsientos() respuesta inesperada', data);
+    throw new Error('No se pudo consultar la disponibilidad de asientos.');
   },
 
   async reservarAsientos(payload){
@@ -2416,24 +2449,33 @@ const Asientos = {
   segmentoActual: 0,
   pasajeroActivo: 0,
   ocupadosCache: {}, // vueloId -> [codigos]
+  _renderToken: 0, // se incrementa en cada render() para descartar respuestas que lleguen fuera de orden
 
-  generarOcupados(vueloId){
-    if(this.ocupadosCache[vueloId]) return this.ocupadosCache[vueloId];
-    const columnas=['A','B','C','D','E','F'];
-    const ocupados=[];
-    const cantidad = 12 + Math.floor(Math.random()*10);
-    for(let i=0;i<cantidad;i++){
-      const fila = 1+Math.floor(Math.random()*18);
-      const col = columnas[Math.floor(Math.random()*columnas.length)];
-      ocupados.push(`${fila}${col}`);
+  // Carga real desde la BD (php/asientos_ocupados.php) los asientos ya
+  // ocupados de un vuelo. Ya no genera datos aleatorios. Se cachea en
+  // memoria solo para no repetir la petición dentro de la misma sesión de
+  // navegación por este vuelo; al reservar, el backend (crear_reserva.php)
+  // vuelve a verificar disponibilidad real dentro de una transacción, así
+  // que este caché nunca es la fuente de verdad para bloquear una reserva.
+  async cargarOcupados(vueloId){
+    if(vueloId in this.ocupadosCache){
+      return this.ocupadosCache[vueloId];
     }
-    this.ocupadosCache[vueloId] = [...new Set(ocupados)];
-    return this.ocupadosCache[vueloId];
+    // Si Api.obtenerAsientos() lanza (fallo real/estructura inesperada),
+    // NO se escribe nada en ocupadosCache — así una consulta fallida nunca
+    // queda "cacheada" como si el vuelo tuviera 0 asientos ocupados. El
+    // error se repropaga tal cual para que render() lo maneje.
+    const ocupados = await Api.obtenerAsientos(vueloId);
+    this.ocupadosCache[vueloId] = ocupados;
+    return ocupados;
   },
 
   ocupadosPorSegmento(segmentoIdx){
     const vuelo = Estado.segmentos[segmentoIdx].vuelo;
-    return this.generarOcupados(vuelo.id);
+    // Si no hay una entrada real en caché (nunca se consultó con éxito),
+    // NO se asume "sin ocupados": se devuelve null para que el llamador
+    // sepa que la disponibilidad real todavía no se conoce.
+    return (vuelo.id in this.ocupadosCache) ? this.ocupadosCache[vuelo.id] : null;
   },
 
   quienTiene(segmentoIdx, codigo){
@@ -2450,16 +2492,26 @@ const Asientos = {
     this.render();
   },
 
-  irSegmento(idx){
+  async irSegmento(idx){
     this.segmentoActual = idx;
     this.pasajeroActivo = 0;
-    this.render();
+    await this.render();
+    if(this.segmentoActual !== idx) return; // otro cambio de segmento ocurrió mientras se esperaba
     document.querySelectorAll('#segmentoTabs .segmento-tab').forEach((b,i)=>b.classList.toggle('activo', i===idx));
   },
 
   click(segmentoIdx, codigo, claseTipo){
     // liberar si el pasajero activo ya tenía asiento en este segmento
     const key = `${segmentoIdx}_${this.pasajeroActivo}`;
+    // evitar seleccionar un asiento realmente ocupado en la BD (defensa
+    // adicional: el HTML ya no genera onclick para asientos ocupados,
+    // pero esta comprobación evita inconsistencias si el DOM quedó desactualizado)
+    const ocupados = this.ocupadosPorSegmento(segmentoIdx);
+    if(ocupados && ocupados.includes(codigo)){
+      Util.mostrarToast('Ese asiento ya está ocupado.', 'error');
+      this.render();
+      return;
+    }
     // evitar seleccionar un asiento ya tomado por otro pasajero en este mismo segmento
     const ocupante = this.quienTiene(segmentoIdx, codigo);
     if(ocupante !== null && ocupante !== this.pasajeroActivo){
@@ -2474,13 +2526,45 @@ const Asientos = {
     this.render();
   },
 
-  render(){
+  async render(){
     const cont = document.getElementById('contenidoAsientos');
     if(!cont) return;
-    cont.innerHTML = Vistas.mapaAsientosHTML(Estado.segmentos[this.segmentoActual].vuelo, this.segmentoActual);
+    const miToken = ++this._renderToken;
+    const vuelo = Estado.segmentos[this.segmentoActual].vuelo;
+    if(!(vuelo.id in this.ocupadosCache)){
+      cont.innerHTML = '<p class="seccion-sub">Consultando disponibilidad real de asientos…</p>';
+    }
+    try{
+      await this.cargarOcupados(vuelo.id);
+    } catch(e){
+      // Si mientras esperábamos esta consulta el usuario ya disparó otro
+      // render() (cambió de segmento/pasajero), esta respuesta llegó tarde
+      // y no debe pisar el DOM del render más reciente.
+      if(this._renderToken !== miToken) return;
+      // No se pudo confirmar la disponibilidad real: NO se pinta el mapa
+      // (eso mostraría todo como libre incorrectamente). Se informa
+      // claramente y se ofrece reintentar.
+      cont.innerHTML = `
+        <div class="alerta alerta-error">
+          ⚠ No se pudo consultar la disponibilidad de asientos. Intenta nuevamente.
+          <div style="margin-top:10px"><button class="btn btn-outline btn-sm" onclick="Asientos.render()">Reintentar</button></div>
+        </div>`;
+      return;
+    }
+    if(this._renderToken !== miToken) return; // idem: descartar si quedó obsoleto
+    cont.innerHTML = Vistas.mapaAsientosHTML(vuelo, this.segmentoActual);
   },
 
   continuar(){
+    // No permitir avanzar si para algún segmento nunca se logró una
+    // consulta real y válida de disponibilidad (ocupadosCache sin entrada
+    // para ese vuelo) — evita continuar con asientos elegidos sobre una
+    // disponibilidad que nunca se pudo confirmar contra la BD.
+    const segmentoSinConsulta = Estado.segmentos.find(s => !(s.vuelo.id in this.ocupadosCache));
+    if(segmentoSinConsulta){
+      Util.mostrarToast('No se pudo confirmar la disponibilidad real de asientos. Vuelve a intentarlo antes de continuar.', 'error');
+      return;
+    }
     // validar que todos los pasajeros que requieren asiento (no bebés) lo tengan en todos los segmentos
     let faltantes = [];
     Estado.segmentos.forEach((s,si)=>{
@@ -2582,10 +2666,16 @@ const Pago = {
     cont.innerHTML='';
     Precios.calcular();
 
+    let errorReserva = null;
     await Util.conLoader('Procesando pago...', async ()=>{
       const resultadoPago = await Api.crearPago({
         metodo:this.metodo, monto:Estado.precios.total, detalle
       });
+
+      // Mapeo de clave de tarifa (frontend) a fare_class real de la BD
+      // (fare_classes.code / flight_segments.fare_class): economy, premium,
+      // business, first. No se inventan valores nuevos.
+      const mapaFareClass = {ECONOMICA:'economy', PREMIUM:'premium', BUSINESS:'business', PRIMERA:'first'};
 
       // construir payload de reserva (nunca se guarda número completo ni CVV)
       const segmentosPayload = Estado.segmentos.map((s,si)=>{
@@ -2593,12 +2683,20 @@ const Pago = {
         const ruta = esReal ? null : Util.rutaPorId(s.vuelo.ruta_id);
         const origen = esReal ? s.vuelo.origen : Util.aeropuertoPorId(ruta.origen_id);
         const destino = esReal ? s.vuelo.destino : Util.aeropuertoPorId(ruta.destino_id);
+        const claveTarifa = s.tipo==='IDA' ? Estado.tarifaIda : Estado.tarifaRegreso;
+        // Un asiento por cada pasajero, en el mismo orden que Estado.pasajeros.
+        const asientos = Estado.pasajeros.map((p,pi)=> Estado.asientos[`${si}_${pi}`] ? Estado.asientos[`${si}_${pi}`].codigo : null);
         return {
           numero_vuelo: s.vuelo.numero_vuelo,
           origen: origen.codigo_iata,
           destino: destino.codigo_iata,
           fecha: s.tipo==='IDA' ? Estado.busqueda.fechaIda : Estado.busqueda.fechaRegreso,
-          asiento: Estado.asientos[`${si}_0`] ? Estado.asientos[`${si}_0`].codigo : '-',
+          flight_id: esReal ? s.vuelo.id : null,
+          fare_class: mapaFareClass[claveTarifa] || 'economy',
+          precio_unitario: esReal ? (Util.obtenerPrecioTarifa(s.vuelo, claveTarifa) || 0) : 0,
+          asientos,
+          // Se conservan para el HTML del comprobante (no usados por crear_reserva.php):
+          asiento: asientos[0] || '-',
           estado_check_in: 0,
           pase_abordar_emitido: 0
         };
@@ -2608,7 +2706,7 @@ const Pago = {
         cliente_id: Estado.usuario ? Estado.usuario.id : null,
         tipo_viaje: Estado.busqueda.tipoViaje,
         total: Estado.precios.total,
-        pasajeros: Estado.pasajeros.map(p=>({nombres:p.nombres, apellidos:p.apellidos, documento:p.numeroDocumento})),
+        pasajeros: Estado.pasajeros.map(p=>({nombres:p.nombres, apellidos:p.apellidos, documento:p.numeroDocumento, tipo:p.type, tipoDocumento:p.tipoDocumento})),
         segmentos: segmentosPayload,
         pago: {metodo:this.metodo, estado: resultadoPago.estado || 'APROBADO', monto: Estado.precios.total},
         // Datos de contacto para el envío del comprobante (booking.contact)
@@ -2619,9 +2717,21 @@ const Pago = {
         }
       };
 
-      const reserva = await Api.crearReserva(payload);
-      Estado.reservaActual = reserva;
+      try{
+        const reserva = await Api.crearReserva(payload);
+        Estado.reservaActual = reserva;
+      } catch(e){
+        // Puede ocurrir si, entre la selección de asientos y este momento,
+        // otra reserva concurrente ya tomó el mismo asiento (verificado por
+        // el backend dentro de una transacción — ver crear_reserva.php).
+        errorReserva = e.message || 'No se pudo completar la reserva. Intenta nuevamente.';
+      }
     });
+
+    if(errorReserva){
+      cont.innerHTML = `<div class="alerta alerta-error">⚠ ${errorReserva}</div>`;
+      return;
+    }
 
     Navegacion.ir('confirmacion');
   }

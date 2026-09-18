@@ -256,8 +256,34 @@ try{
     //     (Util.categoriaPorIndice / selector de tipoDocumento). Se mapea
     //     'young' -> 'child' porque passengers.passenger_type solo admite
     //     adult/child/infant; el resto de valores se usan tal cual.
+    //
+    //     passengers.document_type es CHAR(2), NO puede recibir el texto
+    //     literal del formulario ("DUI"/"PASAPORTE"/"CARNET_MENOR" no caben).
+    //     El esquema sigue el catálogo oficial "Tipo de Documento de
+    //     Identificación" del Ministerio de Hacienda de El Salvador (el
+    //     mismo que usan las tablas dte_headers/dte_items de este proyecto
+    //     para los DTE): 13=DUI, 03=Pasaporte, 36=NIT, 02=Carnet de
+    //     Residente, 37=Otro. Esto se confirmó cruzando el catálogo oficial
+    //     contra el único valor real que ya existía en producción
+    //     (document_type='13' == DUI en ese catálogo).
+    //
+    //     'CARNET_MENOR' (carnet de un MENOR de edad) NO tiene un código
+    //     confirmado en ese catálogo — "02" es "Carnet de Residente"
+    //     (extranjero), que es un documento distinto. No se adivina ese
+    //     código: si llega 'CARNET_MENOR', se rechaza explícitamente con
+    //     un error claro en vez de guardar un valor no verificado.
     $mapaTipoPasajero = ['adult' => 'adult', 'young' => 'child', 'child' => 'child', 'infant' => 'infant'];
-    $tiposDocumentoValidos = ['DUI', 'PASAPORTE', 'CARNET_MENOR'];
+    // passengers.document_type es CHAR(2) NOT NULL. Mapeo confirmado:
+    // 13=DUI y 03=Pasaporte (catálogo oficial de Hacienda El Salvador,
+    // confirmado contra el dato real ya existente en producción).
+    // 37=Otro se adopta como CONVENCIÓN DEL PROYECTO para representar
+    // "Carnet de menor", ya que no existe un código específico oficial
+    // confirmado para ese documento.
+    $mapaTipoDocumento = [
+        'DUI' => '13',
+        'PASAPORTE' => '03',
+        'CARNET_MENOR' => '37'
+    ];
 
     $passengerIds = [];
     $stmtPax = mysqli_prepare($conexion,
@@ -273,9 +299,16 @@ try{
         $documento = isset($p['documento']) ? substr((string)$p['documento'], 0, 30) : '';
         $tipoFrontend = isset($p['tipo']) ? (string)$p['tipo'] : 'adult';
         $passengerType = $mapaTipoPasajero[$tipoFrontend] ?? 'adult';
-        $tipoDocumento = isset($p['tipoDocumento']) && in_array($p['tipoDocumento'], $tiposDocumentoValidos, true)
-            ? $p['tipoDocumento']
-            : 'DUI'; // valor por defecto actual del proyecto, no se sobrescribe si el frontend ya envía otro
+
+        $tipoDocumentoFrontend = isset($p['tipoDocumento']) ? (string)$p['tipoDocumento'] : '';
+        if(!isset($mapaTipoDocumento[$tipoDocumentoFrontend])){
+            // Defensa ante cualquier valor fuera de DUI/PASAPORTE/CARNET_MENOR
+            // (los únicos que el formulario permite hoy): se rechaza la
+            // reserva en vez de insertar un código de 2 caracteres inventado.
+            throw new Exception('Tipo de documento no válido: ' . $tipoDocumentoFrontend);
+        }
+        $tipoDocumento = $mapaTipoDocumento[$tipoDocumentoFrontend];
+
         mysqli_stmt_bind_param($stmtPax, 'isssss', $reservationId, $passengerType, $nombres, $apellidos, $tipoDocumento, $documento);
         if(!mysqli_stmt_execute($stmtPax)){
             throw new Exception('No se pudo insertar un pasajero: ' . mysqli_stmt_error($stmtPax));

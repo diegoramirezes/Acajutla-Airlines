@@ -905,12 +905,14 @@ const Util = {
   // están conectadas (rutas/vuelos mock siguen usando ids del mock).
   // Obtiene el precio de una clase de tarifa (ECONOMICA/PREMIUM/BUSINESS/PRIMERA)
   // para un vuelo. Orden de prioridad, siempre datos reales primero:
-  //  1) vuelo.tarifas[] (esquema anterior con tarifas por clase — si algún
-  //     vuelo real lo trajera, se respeta la tarifa exacta de esa clase).
-  //  2) vuelo.base_price (NUEVO esquema real: flights.base_price). No existe
-  //     tarifas_vuelo en la BD nueva, así que este es el ÚNICO precio real
-  //     confirmado antes de reservar; se usa igual para cualquier clase
-  //     porque no hay una fuente real de precio diferenciado por clase todavía.
+  //  1) vuelo.tarifas[] — precio REAL por clase, viene de flight_fares+
+  //     fare_classes (ver php/buscar_vuelos.php). Es la fuente de verdad;
+  //     si el vuelo trae este array, SIEMPRE se usa antes que cualquier otra cosa.
+  //  2) vuelo.base_price (flights.base_price) — SOLO respaldo cuando el
+  //     vuelo no tiene ninguna fila en flight_fares todavía (por ejemplo,
+  //     vuelos creados antes de que existiera el trigger que las genera).
+  //     En ese caso se usa el mismo precio para cualquier clase porque no
+  //     hay un precio diferenciado real disponible para ese vuelo.
   //  3) vuelo.precio_base * MOCK.tarifas[clave].multiplicador — SOLO como
   //     respaldo para vuelos mock antiguos que no traigan ninguno de los dos
   //     campos anteriores.
@@ -1288,18 +1290,35 @@ const Api = {
     // ningún asiento ocupado) sería indistinguible de "no se pudo consultar",
     // y eso mostraría todos los asientos como libres incorrectamente.
     // Ante cualquier fallo, lanza Error para que el caller lo sepa con certeza.
+    const url = `${API_CONFIG.ENDPOINT_ASIENTOS_OCUPADOS_REAL}?vuelo_id=${encodeURIComponent(vueloId)}`;
     let resp;
     try{
-      resp = await fetch(`${API_CONFIG.ENDPOINT_ASIENTOS_OCUPADOS_REAL}?vuelo_id=${encodeURIComponent(vueloId)}`);
+      resp = await fetch(url);
     } catch(e){
-      console.error('obtenerAsientos() falló al consultar el backend real', e);
+      // A) ruta incorrecta / red caída — nunca llegó a haber respuesta HTTP
+      console.error('obtenerAsientos(): fallo de red al llamar', url, e);
       throw new Error('No se pudo consultar la disponibilidad de asientos.');
     }
-    const data = await resp.json().catch(()=>null);
+    // Se lee como texto primero (no .json() directo) para poder mostrar el
+    // cuerpo crudo en consola si no es JSON válido — así se distingue un
+    // JSON contaminado (warnings de PHP, HTML de error, etc.) de una
+    // respuesta bien formada pero con estructura inesperada.
+    const textoRespuesta = await resp.text();
+    let data = null;
+    try{ data = JSON.parse(textoRespuesta); } catch(e){ data = null; }
+
     if(data && data.ok && data.data && Array.isArray(data.data.ocupados)){
       return data.data.ocupados;
     }
-    console.error('obtenerAsientos() respuesta inesperada', data);
+
+    // Diagnóstico completo en consola: URL, status HTTP y cuerpo crudo,
+    // para identificar exactamente cuál de las causas (B: parámetro,
+    // C: error PHP, D: error SQL, E: conexión BD, F: JSON inválido) ocurrió.
+    console.error('obtenerAsientos(): respuesta inválida o inesperada', {
+      url,
+      httpStatus: resp.status,
+      cuerpoCrudo: textoRespuesta
+    });
     throw new Error('No se pudo consultar la disponibilidad de asientos.');
   },
 
@@ -2904,7 +2923,19 @@ const EstadoVuelo = {
 ===================================================================== */
 const PostRender = {
   vuelos(){ ResultadosVuelos.cargar(); CarruselFechas.init(); },
-  asientos(){ Asientos.segmentoActual = 0; Asientos.pasajeroActivo = 0; Asientos.render(); },
+  asientos(){
+    // La caché de Asientos.ocupadosCache solo debe evitar refetch repetido
+    // DENTRO de una misma visita a esta pantalla (al cambiar de segmento o
+    // pasajero). Al ENTRAR de nuevo a la pantalla se invalida por completo,
+    // para que la disponibilidad siempre se consulte fresca contra
+    // flight_segments/reservations — así una reserva hecha en una visita
+    // anterior (misma sesión del navegador, sin recargar) sí se refleja
+    // como ocupada la próxima vez que se abre el mapa del mismo vuelo.
+    Asientos.ocupadosCache = {};
+    Asientos.segmentoActual = 0;
+    Asientos.pasajeroActivo = 0;
+    Asientos.render();
+  },
   inicio(){
     document.addEventListener('click', function cerrarListas(e){
       if(!e.target.closest('#inputOrigen') && !e.target.closest('#listaOrigen')) document.getElementById('listaOrigen')?.classList.add('oculto');

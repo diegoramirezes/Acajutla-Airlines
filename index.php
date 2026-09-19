@@ -659,7 +659,9 @@ const API_CONFIG = {
   // Endpoints LOCALES reales para asientos/reservas (independientes de
   // USE_MOCKS, misma técnica ya usada para el comprobante por correo).
   get ENDPOINT_ASIENTOS_OCUPADOS_REAL(){ return this.rutaBaseApp() + 'php/asientos_ocupados.php'; },
-  get ENDPOINT_CREAR_RESERVA_REAL(){ return this.rutaBaseApp() + 'php/crear_reserva.php'; }
+  get ENDPOINT_CREAR_RESERVA_REAL(){ return this.rutaBaseApp() + 'php/crear_reserva.php'; },
+  get ENDPOINT_LOGIN_REAL(){ return this.rutaBaseApp() + 'php/auth_login.php'; },
+  get ENDPOINT_REGISTRO_REAL(){ return this.rutaBaseApp() + 'php/auth_registro.php'; }
 };
 
 /* -----------------------------------------------------------------------
@@ -985,6 +987,19 @@ const Util = {
   // Clasifica un precio en bajo/medio/alto según el conjunto de precios disponibles (terciles reales).
   // Convierte un nivel (bajo/medio/alto) en el indicador visual $/$$/$$$
   // que usan el calendario y el carrusel de fechas (sin mostrar montos numéricos).
+  // Alterna un input de contraseña entre password/text sin tocar su valor.
+  // Funciona igual en escritorio y móvil (solo cambia el atributo type).
+  togglePasswordVisibility(inputId, btn){
+    const input = document.getElementById(inputId);
+    if(!input) return;
+    const mostrando = input.type === 'text';
+    input.type = mostrando ? 'password' : 'text';
+    if(btn){
+      btn.textContent = mostrando ? '👁️' : '🙈';
+      btn.setAttribute('aria-label', mostrando ? 'Mostrar contraseña' : 'Ocultar contraseña');
+    }
+  },
+
   indicadorNivelPrecio(nivel){
     if(nivel==='bajo') return '$';
     if(nivel==='medio') return '$$';
@@ -1342,22 +1357,42 @@ const Api = {
   },
 
   async iniciarSesion(correo, password){
-    if(API_CONFIG.USE_MOCKS){
-      const c = MOCK.clientes.find(u=>u.correo===correo && u.password===password);
-      return simularRed(c ? {ok:true, cliente:c} : {ok:false, mensaje:'Credenciales inválidas'}, 500);
+    // Conectado al backend REAL (php/auth_login.php), independiente de
+    // USE_MOCKS (misma técnica ya usada en sendBookingEmail/crearReserva).
+    try{
+      const resp = await fetch(API_CONFIG.ENDPOINT_LOGIN_REAL, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({correo, password})
+      });
+      const data = await resp.json().catch(()=>null);
+      if(!data){
+        return {ok:false, mensaje:'No se pudo iniciar sesión. Intenta nuevamente.'};
+      }
+      return data; // ya viene con la forma {ok, cliente} o {ok:false, mensaje}
+    } catch(e){
+      return {ok:false, mensaje:'No se pudo iniciar sesión. Intenta nuevamente.'};
     }
-    return apiFetch('/auth/login', {method:'POST', body:JSON.stringify({correo,password})});
   },
 
   async registrarCliente(datos){
-    if(API_CONFIG.USE_MOCKS){
-      const existe = MOCK.clientes.some(c=>c.correo===datos.correo);
-      if(existe) return simularRed({ok:false, mensaje:'El correo ya está registrado'}, 400);
-      const nuevo = {id: MOCK.clientes.length+1, ...datos};
-      MOCK.clientes.push(nuevo);
-      return simularRed({ok:true, cliente:nuevo}, 500);
+    // Conectado al backend REAL (php/auth_registro.php), independiente de
+    // USE_MOCKS. Nunca se guarda ni se transmite la contraseña en texto
+    // plano fuera de esta llamada HTTPS al propio backend.
+    try{
+      const resp = await fetch(API_CONFIG.ENDPOINT_REGISTRO_REAL, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(datos)
+      });
+      const data = await resp.json().catch(()=>null);
+      if(!data){
+        return {ok:false, mensaje:'No se pudo crear la cuenta. Intenta nuevamente.'};
+      }
+      return data;
+    } catch(e){
+      return {ok:false, mensaje:'No se pudo crear la cuenta. Intenta nuevamente.'};
     }
-    return apiFetch('/auth/registro', {method:'POST', body:JSON.stringify(datos)});
   },
 
   async consultarEstadoVuelo(numeroVuelo, fecha){
@@ -2103,10 +2138,16 @@ const Vistas = {
           <button class="tab-auth" onclick="Navegacion.ir('registro')">Registrarse</button>
         </div>
         <div class="card">
-          <p style="font-size:.75rem;color:#889;margin-bottom:14px">⚠ Autenticación simulada con fines académicos, no representa un mecanismo de seguridad real.</p>
+          <p style="font-size:.75rem;color:#889;margin-bottom:14px">Proyecto académico — Acajutla Airlines.</p>
           <div id="alertaLogin"></div>
-          <div class="campo-form" style="margin-bottom:12px"><label>Correo</label><input type="email" id="loginCorreo" placeholder="tu@correo.com" value="diego@correo.com"></div>
-          <div class="campo-form" style="margin-bottom:16px"><label>Contraseña</label><input type="password" id="loginPassword" placeholder="••••••" value="123456"></div>
+          <div class="campo-form" style="margin-bottom:12px"><label>Correo</label><input type="email" id="loginCorreo" placeholder="tu@correo.com"></div>
+          <div class="campo-form" style="margin-bottom:16px">
+            <label>Contraseña</label>
+            <div style="position:relative">
+              <input type="password" id="loginPassword" placeholder="••••••" style="width:100%;padding-right:40px;box-sizing:border-box">
+              <button type="button" onclick="Util.togglePasswordVisibility('loginPassword', this)" aria-label="Mostrar contraseña" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:1rem;padding:4px">👁️</button>
+            </div>
+          </div>
           <button class="btn btn-primario btn-block" onclick="Auth.login()">Ingresar</button>
         </div>
       </div>
@@ -2128,7 +2169,20 @@ const Vistas = {
           <div class="campo-form" style="margin-bottom:12px"><label>Correo</label><input type="email" id="regCorreo"></div>
           <div class="campo-form" style="margin-bottom:12px"><label>Teléfono</label><input type="text" id="regTelefono"></div>
           <div class="campo-form" style="margin-bottom:12px"><label>Documento</label><input type="text" id="regDocumento"></div>
-          <div class="campo-form" style="margin-bottom:16px"><label>Contraseña</label><input type="password" id="regPassword"></div>
+          <div class="campo-form" style="margin-bottom:12px">
+            <label>Contraseña</label>
+            <div style="position:relative">
+              <input type="password" id="regPassword" style="width:100%;padding-right:40px;box-sizing:border-box">
+              <button type="button" onclick="Util.togglePasswordVisibility('regPassword', this)" aria-label="Mostrar contraseña" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:1rem;padding:4px">👁️</button>
+            </div>
+          </div>
+          <div class="campo-form" style="margin-bottom:16px">
+            <label>Confirmar contraseña</label>
+            <div style="position:relative">
+              <input type="password" id="regPasswordConfirm" style="width:100%;padding-right:40px;box-sizing:border-box">
+              <button type="button" onclick="Util.togglePasswordVisibility('regPasswordConfirm', this)" aria-label="Mostrar contraseña" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:1rem;padding:4px">👁️</button>
+            </div>
+          </div>
           <button class="btn btn-primario btn-block" onclick="Auth.registrar()">Crear cuenta</button>
         </div>
       </div>
@@ -2863,9 +2917,14 @@ const Auth = {
       documento: document.getElementById('regDocumento').value.trim(),
       password: document.getElementById('regPassword').value
     };
+    const passwordConfirm = document.getElementById('regPasswordConfirm').value;
     const cont = document.getElementById('alertaRegistro');
     if(!datos.nombre || !datos.apellido || !Validar.correoValido(datos.correo) || !datos.password){
       cont.innerHTML = `<div class="alerta alerta-error">⚠ Completa todos los campos con un correo válido.</div>`;
+      return;
+    }
+    if(datos.password !== passwordConfirm){
+      cont.innerHTML = `<div class="alerta alerta-error">⚠ Las contraseñas no coinciden.</div>`;
       return;
     }
     const res = await Api.registrarCliente(datos);

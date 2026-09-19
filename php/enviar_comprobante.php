@@ -184,7 +184,101 @@ foreach($payload['pasajeros'] as $p){
         </tr>';
 }
 
+// -----------------------------------------------------------------------
+// Conversión determinista de un monto en dólares a su representación en
+// letras (español). Sin APIs externas, sin Math.random, sin mock. Usa
+// EXACTAMENTE el mismo $total ya validado más arriba — no se recalcula ni
+// se toma de otra fuente.
+// -----------------------------------------------------------------------
+function _numALetrasGrupo($num){
+    // Convierte un número de 0 a 999 a letras (sin escalas como mil/millón).
+    $num = (int)$num;
+    if($num === 0) return '';
+    if($num === 100) return 'cien';
+
+    $unidades19 = ['', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve',
+        'diez', 'once', 'doce', 'trece', 'catorce', 'quince', 'dieciséis', 'diecisiete', 'dieciocho', 'diecinueve'];
+    $decenas = ['', '', 'veinte', 'treinta', 'cuarenta', 'cincuenta', 'sesenta', 'setenta', 'ochenta', 'noventa'];
+    $centenas = ['', 'ciento', 'doscientos', 'trescientos', 'cuatrocientos', 'quinientos', 'seiscientos', 'setecientos', 'ochocientos', 'novecientos'];
+
+    $c = intdiv($num, 100);
+    $resto = $num % 100;
+    $partes = [];
+    if($c > 0) $partes[] = $centenas[$c];
+
+    if($resto > 0){
+        if($resto < 20){
+            $partes[] = $unidades19[$resto];
+        } elseif($resto < 30){
+            $partes[] = ($resto === 20) ? 'veinte' : 'veinti' . $unidades19[$resto - 20];
+        } else {
+            $d = intdiv($resto, 10);
+            $u = $resto % 10;
+            $texto = $decenas[$d];
+            if($u > 0) $texto .= ' y ' . $unidades19[$u];
+            $partes[] = $texto;
+        }
+    }
+    return implode(' ', $partes);
+}
+
+/**
+ * Convierte un entero no negativo (hasta 999,999,999) a letras en español.
+ */
+function numeroALetrasEntero($n){
+    $n = (int)abs($n); // el total de una reserva nunca es negativo; defensivo, sin inventar signo
+    if($n === 0) return 'cero';
+
+    $millones = intdiv($n, 1000000);
+    $resto1 = $n % 1000000;
+    $miles = intdiv($resto1, 1000);
+    $unidades = $resto1 % 1000;
+
+    $partes = [];
+    if($millones > 0){
+        $partes[] = ($millones === 1) ? 'un millón' : (_numALetrasGrupo($millones) . ' millones');
+    }
+    if($miles > 0){
+        $partes[] = ($miles === 1) ? 'mil' : (_numALetrasGrupo($miles) . ' mil');
+    }
+    if($unidades > 0){
+        $partes[] = _numALetrasGrupo($unidades);
+    }
+
+    $resultado = trim(implode(' ', $partes));
+
+    // Apócope: "uno"/"veintiuno" -> "un"/"veintiún" al anteceder un
+    // sustantivo masculino (dólar/centavo), único uso de este texto.
+    if(substr($resultado, -9) === 'veintiuno'){
+        $resultado = substr($resultado, 0, -9) . 'veintiún';
+    } elseif(substr($resultado, -3) === 'uno'){
+        $resultado = substr($resultado, 0, -3) . 'un';
+    }
+
+    return $resultado;
+}
+
+/**
+ * Convierte un monto monetario (dólares) a su representación en letras.
+ * Usa el mismo redondeo a 2 decimales que $totalFormateado (number_format),
+ * para que el texto corresponda exactamente al número ya mostrado.
+ */
+function montoEnLetras($total){
+    $centavosTotales = (int)round(((float)$total) * 100);
+    $enteros = intdiv($centavosTotales, 100);
+    $centavos = $centavosTotales % 100;
+
+    $textoEnteros = numeroALetrasEntero($enteros);
+    $textoCentavos = numeroALetrasEntero($centavos);
+
+    $palabraDolar = ($enteros === 1) ? 'dólar' : 'dólares';
+    $palabraCentavo = ($centavos === 1) ? 'centavo' : 'centavos';
+
+    return ucfirst($textoEnteros) . ' ' . $palabraDolar . ' con ' . $textoCentavos . ' ' . $palabraCentavo . '.';
+}
+
 $totalFormateado = number_format($total, 2, '.', ',');
+$totalEnLetras = montoEnLetras($total);
 
 $htmlCorreo = '<!DOCTYPE html>
 <html lang="es">
@@ -227,6 +321,7 @@ $htmlCorreo = '<!DOCTYPE html>
             <tr><td style="padding:4px 0;color:#556;">Método:</td><td style="padding:4px 0;">' . h($pagoMetodo) . '</td></tr>
             <tr><td style="padding:4px 0;color:#556;">Estado del pago:</td><td style="padding:4px 0;">' . h($pagoEstado) . '</td></tr>
             <tr><td style="padding:4px 0;color:#556;font-weight:bold;">Total:</td><td style="padding:4px 0;font-weight:bold;">$' . h($totalFormateado) . '</td></tr>
+            <tr><td style="padding:4px 0;color:#556;">Total en letras:</td><td style="padding:4px 0;">' . h($totalEnLetras) . '</td></tr>
           </table>
 
           <p style="font-size:12px;color:#889;margin-top:24px;">Este es un comprobante generado automáticamente. Conserva este correo como referencia de tu reserva.</p>

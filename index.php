@@ -993,12 +993,19 @@ const Util = {
   },
 
   getDatePriceLevel(precio, listaPrecios){
-    const validos = listaPrecios.filter(p=>p!==null && p!==undefined);
+    const validos = listaPrecios.filter(p=>p!==null && p!==undefined).slice().sort((a,b)=>a-b);
     if(!validos.length || precio===null || precio===undefined) return null;
-    const min = Math.min(...validos), max = Math.max(...validos);
-    const rango = (max-min) || 1;
-    const posicion = (precio-min)/rango;
-    return posicion <= 0.33 ? 'bajo' : (posicion <= 0.66 ? 'medio' : 'alto');
+    if(validos.length === 1) return 'bajo'; // un solo precio real ese mes: no hay con qué comparar
+    // Clasificación por PERCENTIL (posición en el ranking de precios ordenados),
+    // no por posición lineal dentro del rango min-max. Con datos reales, unos
+    // pocos días caros estiran el rango y aplastan a todos los demás hacia
+    // 'bajo' si se usa (precio-min)/(max-min); por percentil, cada tercio de
+    // fechas (por cantidad, no por distancia de precio) recibe su color.
+    const rango = validos[validos.length-1] - validos[0];
+    if(rango === 0) return 'bajo'; // todos los precios reales del mes son idénticos
+    const posicionRanking = validos.findIndex(p => p >= precio);
+    const percentil = posicionRanking / (validos.length - 1);
+    return percentil <= 0.33 ? 'bajo' : (percentil <= 0.66 ? 'medio' : 'alto');
   },
 
   // Determina la categoría de pasajero según su índice, en el orden:

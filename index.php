@@ -661,7 +661,10 @@ const API_CONFIG = {
   get ENDPOINT_ASIENTOS_OCUPADOS_REAL(){ return this.rutaBaseApp() + 'php/asientos_ocupados.php'; },
   get ENDPOINT_CREAR_RESERVA_REAL(){ return this.rutaBaseApp() + 'php/crear_reserva.php'; },
   get ENDPOINT_LOGIN_REAL(){ return this.rutaBaseApp() + 'php/auth_login.php'; },
-  get ENDPOINT_REGISTRO_REAL(){ return this.rutaBaseApp() + 'php/auth_registro.php'; }
+  get ENDPOINT_REGISTRO_REAL(){ return this.rutaBaseApp() + 'php/auth_registro.php'; },
+  get ENDPOINT_MIS_RESERVAS_REAL(){ return this.rutaBaseApp() + 'php/mis_reservas.php'; },
+  get ENDPOINT_CONSULTAR_RESERVA_REAL(){ return this.rutaBaseApp() + 'php/consultar_reserva.php'; },
+  get ENDPOINT_ESTADO_VUELO_REAL(){ return this.rutaBaseApp() + 'php/estado_vuelo.php'; }
 };
 
 /* -----------------------------------------------------------------------
@@ -1293,11 +1296,34 @@ const Api = {
   },
 
   async obtenerReserva(pnr, documentoOCorreo){
-    if(API_CONFIG.USE_MOCKS){
-      const r = MOCK.reservas.find(x=>x.pnr === pnr);
-      return simularRed(r || null, 450);
+    // Conectado al backend REAL (php/consultar_reserva.php), independiente
+    // de USE_MOCKS (misma técnica que sendBookingEmail/crearReserva).
+    try{
+      const url = `${API_CONFIG.ENDPOINT_CONSULTAR_RESERVA_REAL}?pnr=${encodeURIComponent(pnr)}&ref=${encodeURIComponent(documentoOCorreo)}`;
+      const resp = await fetch(url);
+      const data = await resp.json().catch(()=>null);
+      if(!data || !data.ok) return null;
+      return data.data; // null si no existe o el segundo dato no coincide
+    } catch(e){
+      console.error('obtenerReserva() falló al consultar el backend real', e);
+      return null;
     }
-    return apiFetch(`/reservas/${pnr}?ref=${encodeURIComponent(documentoOCorreo)}`);
+  },
+
+  async obtenerMisReservas(customerId){
+    // Conectado al backend REAL (php/mis_reservas.php), independiente de
+    // USE_MOCKS. Lista solo reservas hechas con esa cuenta ya autenticada
+    // (reservations.customer_id) — no incluye reservas hechas como invitado.
+    try{
+      const url = `${API_CONFIG.ENDPOINT_MIS_RESERVAS_REAL}?customer_id=${encodeURIComponent(customerId)}`;
+      const resp = await fetch(url);
+      const data = await resp.json().catch(()=>null);
+      if(!data || !data.ok || !Array.isArray(data.data)) return [];
+      return data.data;
+    } catch(e){
+      console.error('obtenerMisReservas() falló al consultar el backend real', e);
+      return [];
+    }
   },
 
   async crearPasajeros(reservaId, pasajeros){
@@ -1396,11 +1422,18 @@ const Api = {
   },
 
   async consultarEstadoVuelo(numeroVuelo, fecha){
-    if(API_CONFIG.USE_MOCKS){
-      const v = MOCK.vuelos.find(x=>x.numero_vuelo.toUpperCase()===String(numeroVuelo).toUpperCase());
-      return simularRed(v || null, 400);
+    // Conectado al backend REAL (php/estado_vuelo.php), independiente de
+    // USE_MOCKS (misma técnica que sendBookingEmail/crearReserva).
+    try{
+      const url = `${API_CONFIG.ENDPOINT_ESTADO_VUELO_REAL}?numero_vuelo=${encodeURIComponent(numeroVuelo)}&fecha=${encodeURIComponent(fecha||'')}`;
+      const resp = await fetch(url);
+      const data = await resp.json().catch(()=>null);
+      if(!data || !data.ok) return null;
+      return data.data; // null si no existe ese vuelo/fecha
+    } catch(e){
+      console.error('consultarEstadoVuelo() falló al consultar el backend real', e);
+      return null;
     }
-    return apiFetch(`/vuelos/estado?numero=${numeroVuelo}&fecha=${fecha}`);
   },
 
   // -----------------------------------------------------------------------
@@ -2195,7 +2228,6 @@ const Vistas = {
       return `<div class="pantalla contenedor" style="padding-top:40px"><div class="estado-vacio"><div class="icono">🔒</div>Debes iniciar sesión para ver tu perfil.<br><br><button class="btn btn-primario" onclick="Navegacion.ir('login')">Iniciar sesión</button></div></div>`;
     }
     const u = Estado.usuario;
-    const misReservas = MOCK.reservas.filter(r=>r.cliente_id===u.id);
     return `
     <div class="pantalla contenedor" style="padding-top:24px">
       <div class="perfil-header">
@@ -2208,13 +2240,7 @@ const Vistas = {
       </div>
       <div class="card">
         <h4 style="margin-bottom:14px;color:var(--azul-oscuro)">Mis reservas</h4>
-        ${misReservas.length===0 ? `<div class="estado-vacio"><div class="icono">🧳</div>Aún no tienes reservas.</div>` : `
-        <table class="tabla-simple">
-          <thead><tr><th>PNR</th><th>Fecha</th><th>Estado</th><th>Total</th></tr></thead>
-          <tbody>
-            ${misReservas.map(r=>`<tr><td>${r.pnr}</td><td>${Util.formatoFechaLarga(r.creado_en)}</td><td><span class="badge badge-programado">${r.estado}</span></td><td>${Util.formatoMoneda(r.total)}</td></tr>`).join('')}
-          </tbody>
-        </table>`}
+        <div id="contenidoMisReservas"><div class="estado-vacio"><div class="icono">⏳</div>Cargando tus reservas...</div></div>
       </div>
     </div>`;
   },
@@ -2965,9 +2991,10 @@ const EstadoVuelo = {
       resultado.innerHTML = `<div class="alerta alerta-error">No se encontró información para ese número de vuelo.</div>`;
       return;
     }
-    const ruta = Util.rutaPorId(v.ruta_id);
-    const origen = Util.aeropuertoPorId(ruta.origen_id);
-    const destino = Util.aeropuertoPorId(ruta.destino_id);
+    const esReal = !!v.origen && !!v.destino;
+    const ruta = esReal ? null : Util.rutaPorId(v.ruta_id);
+    const origen = esReal ? v.origen : Util.aeropuertoPorId(ruta.origen_id);
+    const destino = esReal ? v.destino : Util.aeropuertoPorId(ruta.destino_id);
     resultado.innerHTML = `
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
@@ -2989,6 +3016,23 @@ const EstadoVuelo = {
 ===================================================================== */
 const PostRender = {
   vuelos(){ ResultadosVuelos.cargar(); CarruselFechas.init(); },
+  async perfil(){
+    if(!Estado.usuario || !Estado.usuario.id) return; // sin sesión, o cuenta interna sin customer_id
+    const cont = document.getElementById('contenidoMisReservas');
+    if(!cont) return;
+    const misReservas = await Api.obtenerMisReservas(Estado.usuario.id);
+    if(misReservas.length === 0){
+      cont.innerHTML = `<div class="estado-vacio"><div class="icono">🧳</div>Aún no tienes reservas.</div>`;
+      return;
+    }
+    cont.innerHTML = `
+      <table class="tabla-simple">
+        <thead><tr><th>PNR</th><th>Fecha</th><th>Estado</th><th>Total</th></tr></thead>
+        <tbody>
+          ${misReservas.map(r=>`<tr><td>${r.pnr}</td><td>${Util.formatoFechaLarga(r.creado_en)}</td><td><span class="badge badge-programado">${r.estado}</span></td><td>${Util.formatoMoneda(r.total)}</td></tr>`).join('')}
+        </tbody>
+      </table>`;
+  },
   asientos(){
     // La caché de Asientos.ocupadosCache solo debe evitar refetch repetido
     // DENTRO de una misma visita a esta pantalla (al cambiar de segmento o

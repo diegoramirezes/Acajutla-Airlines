@@ -473,6 +473,9 @@ function enviarCorreoNylas($apiKey, $grantId, $destinatario, $asunto, $htmlBody)
         'subject' => $asunto,
         'to'      => [['email' => $destinatario]],
         'body'    => $htmlBody,
+        // Explícito (aunque 'false' ya es el valor por defecto de la API de
+        // Nylas): el body se envía como HTML real, nunca como texto plano.
+        'is_plaintext' => false,
     ];
     $cuerpoJson = json_encode($cuerpo, JSON_UNESCAPED_UNICODE);
 

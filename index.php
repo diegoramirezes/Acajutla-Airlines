@@ -1163,7 +1163,18 @@ const Validar = {
     return errores;
   },
 
-  documentoValido(v){ return /^[A-Za-z0-9-]{5,20}$/.test(v||''); },
+  // Formato final exigido según el tipo de documento:
+  // - DUI: EXACTAMENTE 8 dígitos + guion + 1 dígito (9 dígitos en total),
+  //   el mismo formato oficial que ya usa el mapeo document_type=13.
+  // - PASAPORTE / CARNET_MENOR: no existe en el proyecto/BD una regla más
+  //   específica que la genérica ya establecida (alfanumérico, 5-20
+  //   caracteres) — se mantiene esa, sin inventar una nueva.
+  documentoValido(v, tipoDocumento){
+    if(tipoDocumento === 'DUI'){
+      return /^\d{8}-\d$/.test(v||'');
+    }
+    return /^[A-Za-z0-9-]{5,20}$/.test(v||'');
+  },
   correoValido(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v||''); },
   soloTexto(v){ return /^[A-Za-zÁÉÍÓÚÑáéíóúñ\s']{2,60}$/.test(v||''); },
 
@@ -1184,7 +1195,9 @@ const Validar = {
     if(!Validar.soloTexto(p.nombres)) err.nombres='Ingresa nombres válidos.';
     if(!Validar.soloTexto(p.apellidos)) err.apellidos='Ingresa apellidos válidos.';
     if(!Validar.requerido(p.tipoDocumento)) err.tipoDocumento='Selecciona un tipo de documento.';
-    if(!Validar.documentoValido(p.numeroDocumento)) err.numeroDocumento='Documento inválido (5-20 caracteres).';
+    if(!Validar.documentoValido(p.numeroDocumento, p.tipoDocumento)){
+      err.numeroDocumento = p.tipoDocumento==='DUI' ? 'El DUI debe tener el formato 12345678-9.' : 'Documento inválido (5-20 caracteres).';
+    }
     if(!Validar.requerido(p.nacionalidad)) err.nacionalidad='Ingresa la nacionalidad.';
     if(!Validar.requerido(p.fechaNacimiento)) err.fechaNacimiento='Selecciona la fecha de nacimiento.';
     if(!Validar.requerido(p.genero)) err.genero='Selecciona el género.';
@@ -1847,7 +1860,7 @@ const Vistas = {
                 <option value="CARNET_MENOR" ${p.tipoDocumento==='CARNET_MENOR'?'selected':''}>Carnet de menor</option>
               </select>
             </div>
-            <div class="campo-form"><label>Número de documento *</label><input type="text" data-p="${i}" data-f="numeroDocumento" value="${Util.escapeHtml(p.numeroDocumento||'')}" oninput="Pasajeros.formatearDocumento(this)"></div>
+            <div class="campo-form"><label>Número de documento *</label><input type="text" maxlength="20" data-p="${i}" data-f="numeroDocumento" value="${Util.escapeHtml(p.numeroDocumento||'')}" oninput="Pasajeros.formatearDocumento(this)"></div>
             <div class="campo-form" style="position:relative">
               <label>Nacionalidad *</label>
               <input type="text" id="nacionalidadInput_${i}" autocomplete="off"
@@ -2648,13 +2661,18 @@ const Pasajeros = {
     }
   },
 
-  // Al cambiar el tipo de documento, reformatea lo que ya esté escrito en
-  // el campo de número de documento según el nuevo tipo.
+  // Al cambiar el tipo de documento, se limpia el campo de número de
+  // documento por completo — evita dejar residuo del formato/máscara del
+  // tipo anterior (por ejemplo, un "12345678-9" de DUI quedando tal cual
+  // en el campo al cambiar a Pasaporte o Carnet de menor).
   onTipoDocumentoChange(selectEl){
     const contenedor = selectEl.closest('.pasajero-form');
     if(!contenedor) return;
     const inputDoc = contenedor.querySelector('input[data-f="numeroDocumento"]');
-    if(inputDoc) this.formatearDocumento(inputDoc);
+    if(inputDoc){
+      inputDoc.value = '';
+      this.formatearDocumento(inputDoc);
+    }
   },
 
   // DUI: máscara automática ########-# (8 dígitos, guion, 1 dígito

@@ -120,6 +120,7 @@ $sql = "SELECT
           AND ad.id = ?
           AND DATE(f.departure_datetime) = ?
           AND f.status <> 'cancelled'
+          AND f.departure_datetime > NOW()
         ORDER BY f.departure_datetime ASC";
 
 $stmt = mysqli_prepare($conexion, $sql);
@@ -233,6 +234,7 @@ if(!empty($idsVuelos)){
                     FROM flight_fares ff
                     INNER JOIN fare_classes fc ON fc.id = ff.fare_class_id
                     WHERE fc.active = 1
+                      AND ff.active = 1
                       AND ff.flight_id IN ($placeholders)";
 
     $stmtTarifas = mysqli_prepare($conexion, $sqlTarifas);

@@ -164,7 +164,10 @@ try{
     $flightIdsOrdenados = array_keys($flightIdsUnicos);
     sort($flightIdsOrdenados, SORT_NUMERIC);
 
-    $stmtLockVuelo = mysqli_prepare($conexion, "SELECT id FROM flights WHERE id = ? FOR UPDATE");
+    $stmtLockVuelo = mysqli_prepare($conexion,
+        "SELECT id, departure_datetime, (departure_datetime > NOW()) AS aun_disponible
+         FROM flights WHERE id = ? FOR UPDATE"
+    );
     if(!$stmtLockVuelo){
         throw new Exception('No se pudo preparar el bloqueo del vuelo.');
     }
@@ -178,6 +181,12 @@ try{
         if($resultadoVuelo) mysqli_free_result($resultadoVuelo);
         if(!$filaVuelo){
             throw new Exception('El vuelo ' . $flightId . ' no existe.');
+        }
+        // Comparación por fecha+hora real del servidor de BD (NOW()), no de
+        // ningún reloj del navegador — un vuelo cuya salida ya pasó nunca
+        // puede reservarse, aunque el flight_id se envíe manualmente.
+        if(!$filaVuelo['aun_disponible']){
+            throw new Exception('VUELO_YA_SALIO:' . $flightId);
         }
     }
     mysqli_stmt_close($stmtLockVuelo);
@@ -360,6 +369,17 @@ try{
         }
         $tipoDocumento = $mapaTipoDocumento[$tipoDocumentoFrontend];
 
+        // Validación de formato en backend (no confiar solo en el frontend),
+        // mismo criterio que Validar.documentoValido() en index.php: DUI
+        // exige exactamente 8 dígitos + guion + 1 dígito; el resto usa la
+        // regla genérica ya establecida en el proyecto (alfanumérico 5-20).
+        $formatoValido = ($tipoDocumentoFrontend === 'DUI')
+            ? preg_match('/^\d{8}-\d$/', $documento)
+            : preg_match('/^[A-Za-z0-9-]{5,20}$/', $documento);
+        if(!$formatoValido){
+            throw new Exception('Formato de documento inválido para ' . $tipoDocumentoFrontend . ': ' . $documento);
+        }
+
         // Nacionalidad: passengers.nationality guarda el código real de
         // countries.code. Nunca se confía solo en lo que envía el frontend
         // (el buscador de nacionalidad ya lo restringe, pero el backend
@@ -429,6 +449,11 @@ try{
         $asiento = substr($msg, strlen('SEAT_TAKEN:'));
         error_log('[Acajutla Airlines] Intento de reservar asiento ya ocupado: ' . $asiento);
         responderError('El asiento ' . $asiento . ' ya fue reservado por otro pasajero. Selecciona otro asiento.', 409);
+    }
+    if(strpos($msg, 'VUELO_YA_SALIO:') === 0){
+        $flightIdSalido = substr($msg, strlen('VUELO_YA_SALIO:'));
+        error_log('[Acajutla Airlines] Intento de reservar un vuelo cuya salida ya pasó: flight_id=' . $flightIdSalido);
+        responderError('Uno de los vuelos seleccionados ya no está disponible porque su salida ya pasó. Busca un vuelo nuevo.', 409);
     }
     error_log('[Acajutla Airlines] Error al crear reserva: ' . $msg);
     responderError('No se pudo completar la reserva. Intenta nuevamente.', 500);

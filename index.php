@@ -664,7 +664,8 @@ const API_CONFIG = {
   get ENDPOINT_REGISTRO_REAL(){ return this.rutaBaseApp() + 'php/auth_registro.php'; },
   get ENDPOINT_MIS_RESERVAS_REAL(){ return this.rutaBaseApp() + 'php/mis_reservas.php'; },
   get ENDPOINT_CONSULTAR_RESERVA_REAL(){ return this.rutaBaseApp() + 'php/consultar_reserva.php'; },
-  get ENDPOINT_ESTADO_VUELO_REAL(){ return this.rutaBaseApp() + 'php/estado_vuelo.php'; }
+  get ENDPOINT_ESTADO_VUELO_REAL(){ return this.rutaBaseApp() + 'php/estado_vuelo.php'; },
+  get ENDPOINT_PAISES_REAL(){ return this.rutaBaseApp() + 'php/paises.php'; }
 };
 
 /* -----------------------------------------------------------------------
@@ -1001,6 +1002,13 @@ const Util = {
       btn.textContent = mostrando ? '👁️' : '🙈';
       btn.setAttribute('aria-label', mostrando ? 'Mostrar contraseña' : 'Ocultar contraseña');
     }
+  },
+
+  // Filtra en tiempo real solo los caracteres que Validar.soloTexto ya
+  // acepta (letras con tildes/ñ, espacios, apóstrofe) — mismo criterio que
+  // la validación real antes de enviar, no uno nuevo inventado aquí.
+  filtrarSoloTexto(input){
+    input.value = input.value.replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ\s']/g, '');
   },
 
   indicadorNivelPrecio(nivel){
@@ -1436,6 +1444,20 @@ const Api = {
     }
   },
 
+  async buscarPaises(q){
+    // Conectado al backend REAL (php/paises.php), tabla countries.
+    try{
+      const url = `${API_CONFIG.ENDPOINT_PAISES_REAL}?q=${encodeURIComponent(q||'')}`;
+      const resp = await fetch(url);
+      const data = await resp.json().catch(()=>null);
+      if(!data || !data.ok || !Array.isArray(data.data)) return [];
+      return data.data; // [{code,name}, ...]
+    } catch(e){
+      console.error('buscarPaises() falló al consultar el backend real', e);
+      return [];
+    }
+  },
+
   // -----------------------------------------------------------------------
   // Calendario de precios — ETAPA DE CONEXIÓN REAL.
   // El backend NO expone un endpoint de "precios por mes", así que esta
@@ -1559,6 +1581,29 @@ const Navegacion = {
 
 document.getElementById('btnHamburguesa').addEventListener('click', ()=>{
   document.getElementById('navLinks').classList.toggle('abierto');
+});
+
+// Navegación con ENTER en el formulario de pasajeros y de contacto: pasa al
+// siguiente campo lógico en vez de intentar enviar el formulario o cerrar
+// nada. Delegado (no se agrega a cada input individualmente) y limitado a
+// estos campos específicos para no alterar el comportamiento de ENTER en
+// otras partes de la app (buscador, autocompletar de aeropuertos, etc.).
+// No interfiere con TAB, que sigue funcionando de forma nativa del navegador.
+document.addEventListener('keydown', function(e){
+  if(e.key !== 'Enter') return;
+  const el = e.target;
+  const esCampoPasajero = el.matches && el.matches('input[data-p], select[data-p]');
+  const esCampoContacto = el.matches && el.matches('#contactoNombre, #contactoEmail, #contactoEmailConfirmacion, #contactoTelefono');
+  if(!esCampoPasajero && !esCampoContacto) return;
+  e.preventDefault();
+  const enfocables = Array.from(document.querySelectorAll('input, select, textarea'))
+    .filter(f => !f.disabled && f.offsetParent !== null);
+  const idx = enfocables.indexOf(el);
+  if(idx > -1 && idx < enfocables.length - 1){
+    const siguiente = enfocables[idx+1];
+    siguiente.focus();
+    if(siguiente.select) siguiente.select();
+  }
 });
 
 /* =====================================================================
@@ -1791,19 +1836,30 @@ const Vistas = {
         <h3>Pasajero ${i+1} · ${cat.label} ${cat.requiresSeat ? '' : '· No requiere asiento (viaja en brazos)'}</h3>
         <div class="pasajero-form">
           <div class="form-grid">
-            <div class="campo-form"><label>Nombres *</label><input type="text" data-p="${i}" data-f="nombres" value="${Util.escapeHtml(p.nombres||'')}"></div>
-            <div class="campo-form"><label>Apellidos *</label><input type="text" data-p="${i}" data-f="apellidos" value="${Util.escapeHtml(p.apellidos||'')}"></div>
+            <div class="campo-form"><label>Nombres *</label><input type="text" data-p="${i}" data-f="nombres" value="${Util.escapeHtml(p.nombres||'')}" oninput="Util.filtrarSoloTexto(this)"></div>
+            <div class="campo-form"><label>Apellidos *</label><input type="text" data-p="${i}" data-f="apellidos" value="${Util.escapeHtml(p.apellidos||'')}" oninput="Util.filtrarSoloTexto(this)"></div>
             <div class="campo-form">
               <label>Tipo de documento *</label>
-              <select data-p="${i}" data-f="tipoDocumento">
+              <select data-p="${i}" data-f="tipoDocumento" onchange="Pasajeros.onTipoDocumentoChange(this)">
                 <option value="">Seleccionar</option>
                 <option value="DUI" ${p.tipoDocumento==='DUI'?'selected':''}>DUI</option>
                 <option value="PASAPORTE" ${p.tipoDocumento==='PASAPORTE'?'selected':''}>Pasaporte</option>
                 <option value="CARNET_MENOR" ${p.tipoDocumento==='CARNET_MENOR'?'selected':''}>Carnet de menor</option>
               </select>
             </div>
-            <div class="campo-form"><label>Número de documento *</label><input type="text" data-p="${i}" data-f="numeroDocumento" value="${Util.escapeHtml(p.numeroDocumento||'')}"></div>
-            <div class="campo-form"><label>Nacionalidad *</label><input type="text" data-p="${i}" data-f="nacionalidad" value="${Util.escapeHtml(p.nacionalidad||'')}"></div>
+            <div class="campo-form"><label>Número de documento *</label><input type="text" data-p="${i}" data-f="numeroDocumento" value="${Util.escapeHtml(p.numeroDocumento||'')}" oninput="Pasajeros.formatearDocumento(this)"></div>
+            <div class="campo-form" style="position:relative">
+              <label>Nacionalidad *</label>
+              <input type="text" id="nacionalidadInput_${i}" autocomplete="off"
+                     value="${Util.escapeHtml(p.nacionalidad ? (p.nacionalidadNombre ? (p.nacionalidad+' — '+p.nacionalidadNombre) : p.nacionalidad) : '')}"
+                     oninput="Pasajeros.buscarNacionalidad(${i}, this.value)"
+                     onfocus="Pasajeros.buscarNacionalidad(${i}, this.value)"
+                     onkeydown="Pasajeros.navegarNacionalidad(event, ${i})"
+                     onblur="setTimeout(()=>Pasajeros.ocultarListaNacionalidad(${i}), 150)">
+              <input type="hidden" data-p="${i}" data-f="nacionalidad" id="nacionalidadCodigo_${i}" value="${Util.escapeHtml(p.nacionalidad||'')}">
+              <div id="nacionalidadLista_${i}" class="lista-autocompletar" style="display:none;position:absolute;z-index:20;top:100%;left:0;background:#fff;border:1px solid #d7dde5;border-radius:8px;max-height:210px;overflow-y:auto;width:100%;box-shadow:0 6px 16px rgba(0,0,0,.12);margin-top:2px"></div>
+              <small class="msg-error" id="msgNacionalidad_${i}"></small>
+            </div>
             <div class="campo-form full">
               <label>Fecha de nacimiento *</label>
               <div style="display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:8px">
@@ -1852,7 +1908,7 @@ const Vistas = {
           <p style="font-size:.8rem;color:#889;margin-bottom:14px">Usaremos estos datos para enviarte el comprobante de tu reserva.</p>
           <div id="alertaContacto"></div>
           <div class="form-grid">
-            <div class="campo-form full"><label>Nombre completo *</label><input type="text" id="contactoNombre" value="${Util.escapeHtml(c.nombre)}"></div>
+            <div class="campo-form full"><label>Nombre completo *</label><input type="text" id="contactoNombre" value="${Util.escapeHtml(c.nombre)}" oninput="Util.filtrarSoloTexto(this)"></div>
             <div class="campo-form"><label>Correo electrónico *</label><input type="email" id="contactoEmail" value="${Util.escapeHtml(c.email)}" placeholder="tu@correo.com"></div>
             <div class="campo-form"><label>Confirmar correo electrónico *</label><input type="email" id="contactoEmailConfirmacion" value="${Util.escapeHtml(c.emailConfirmacion)}" placeholder="tu@correo.com"></div>
             <div class="campo-form">
@@ -2148,7 +2204,8 @@ const Vistas = {
       ${r.segmentos.map(s=>`
         <div class="resumen-item">
           <h4>Vuelo ${s.numero_vuelo} · ${s.origen} → ${s.destino}</h4>
-          <p>Fecha: ${Util.formatoFechaLarga(s.fecha)} · Asiento: ${s.asiento} · Check-in: ${s.estado_check_in?'Realizado':'Pendiente'} · Pase de abordar: ${s.pase_abordar_emitido?'Emitido':'No emitido'}</p>
+          <p>Fecha: ${Util.formatoFechaLarga(s.fecha)} · Check-in: ${s.estado_check_in?'Realizado':'Pendiente'} · Pase de abordar: ${s.pase_abordar_emitido?'Emitido':'No emitido'}</p>
+          ${Array.isArray(s.pasajeros_asientos) ? `<ul style="margin:6px 0 0 18px;padding:0">${s.pasajeros_asientos.map(pa=>`<li>${pa.nombre} — ${pa.asiento||'-'}</li>`).join('')}</ul>` : ''}
         </div>`).join('')}
       <div class="resumen-item">
         <h4>Pasajeros</h4>
@@ -2497,6 +2554,128 @@ const Pasajeros = {
   },
 
   // Formatea el teléfono en tiempo real como XXXX-XXXX, permitiendo solo dígitos.
+  // -----------------------------------------------------------------------
+  // NACIONALIDAD: buscador/autocompletado real contra la tabla countries
+  // (vía php/paises.php). El input visible es solo para buscar/mostrar;
+  // el código real que se envía (passengers.nationality) vive en el input
+  // oculto nacionalidadCodigo_i, que leerFormulario() ya recoge por su
+  // data-f="nacionalidad". Al escribir se borra el código oculto, así que
+  // un texto libre sin seleccionar una opción real de la lista NUNCA queda
+  // guardado como nacionalidad válida (Validar.pasajero ya exige que no
+  // esté vacío).
+  // -----------------------------------------------------------------------
+  _nacResultados: {},
+  _nacResaltado: {},
+
+  async buscarNacionalidad(i, texto){
+    const inputCodigo = document.getElementById(`nacionalidadCodigo_${i}`);
+    if(inputCodigo) inputCodigo.value = '';
+    if(Estado.pasajeros[i]){ Estado.pasajeros[i].nacionalidad = ''; Estado.pasajeros[i].nacionalidadNombre = ''; }
+
+    const resultados = await Api.buscarPaises(texto);
+    this._nacResultados[i] = resultados;
+    this._nacResaltado[i] = resultados.length ? 0 : -1;
+    this.renderNacionalidadLista(i);
+  },
+
+  renderNacionalidadLista(i){
+    const lista = document.getElementById(`nacionalidadLista_${i}`);
+    if(!lista) return;
+    const resultados = this._nacResultados[i] || [];
+    const resaltado = this._nacResaltado[i] ?? -1;
+    if(resultados.length === 0){
+      lista.style.display = 'none';
+      lista.innerHTML = '';
+      return;
+    }
+    lista.innerHTML = resultados.map((p,idx)=>`
+      <div onmousedown="Pasajeros.seleccionarNacionalidad(${i}, '${p.code}', '${Util.escapeHtml(p.name).replace(/'/g,"\\'")}')"
+           style="padding:8px 10px;cursor:pointer;font-size:.9rem;${idx===resaltado?'background:#eef3f8':''}">
+        ${Util.escapeHtml(p.code)} — ${Util.escapeHtml(p.name)}
+      </div>`).join('');
+    lista.style.display = 'block';
+  },
+
+  seleccionarNacionalidad(i, code, name){
+    const inputTexto = document.getElementById(`nacionalidadInput_${i}`);
+    const inputCodigo = document.getElementById(`nacionalidadCodigo_${i}`);
+    if(inputTexto) inputTexto.value = `${code} — ${name}`;
+    if(inputCodigo) inputCodigo.value = code;
+    if(!Estado.pasajeros[i]) Estado.pasajeros[i] = {};
+    Estado.pasajeros[i].nacionalidad = code;
+    Estado.pasajeros[i].nacionalidadNombre = name;
+    this.ocultarListaNacionalidad(i);
+    const msg = document.getElementById(`msgNacionalidad_${i}`);
+    if(msg) msg.textContent = '';
+  },
+
+  ocultarListaNacionalidad(i){
+    const lista = document.getElementById(`nacionalidadLista_${i}`);
+    if(lista) lista.style.display = 'none';
+  },
+
+  navegarNacionalidad(event, i){
+    const resultados = this._nacResultados[i] || [];
+    if(event.key === 'Escape'){
+      this.ocultarListaNacionalidad(i);
+      return;
+    }
+    if(event.key === 'ArrowDown'){
+      event.preventDefault();
+      if(!resultados.length) return;
+      this._nacResaltado[i] = Math.min((this._nacResaltado[i] ?? -1) + 1, resultados.length - 1);
+      this.renderNacionalidadLista(i);
+      return;
+    }
+    if(event.key === 'ArrowUp'){
+      event.preventDefault();
+      if(!resultados.length) return;
+      this._nacResaltado[i] = Math.max((this._nacResaltado[i] ?? 0) - 1, 0);
+      this.renderNacionalidadLista(i);
+      return;
+    }
+    if(event.key === 'Enter'){
+      // Selecciona la opción resaltada de la lista; NUNCA envía el
+      // formulario ni cierra el modal/pantalla.
+      event.preventDefault();
+      event.stopPropagation();
+      const resaltado = this._nacResaltado[i];
+      if(resultados.length && resaltado !== undefined && resaltado >= 0){
+        const pais = resultados[resaltado];
+        this.seleccionarNacionalidad(i, pais.code, pais.name);
+      }
+      return;
+    }
+  },
+
+  // Al cambiar el tipo de documento, reformatea lo que ya esté escrito en
+  // el campo de número de documento según el nuevo tipo.
+  onTipoDocumentoChange(selectEl){
+    const contenedor = selectEl.closest('.pasajero-form');
+    if(!contenedor) return;
+    const inputDoc = contenedor.querySelector('input[data-f="numeroDocumento"]');
+    if(inputDoc) this.formatearDocumento(inputDoc);
+  },
+
+  // DUI: máscara automática ########-# (8 dígitos, guion, 1 dígito
+  // verificador) — formato oficial del DUI de El Salvador, el mismo que ya
+  // usa el proyecto como ejemplo (MOCK.clientes: '01234567-8'). El usuario
+  // solo escribe/pega números; el guion se inserta automáticamente.
+  // PASAPORTE / CARNET_MENOR: no existe en el proyecto una máscara o
+  // longitud específica confirmada distinta de la validación genérica ya
+  // existente (Validar.documentoValido: alfanumérico, 5-20 caracteres), así
+  // que NO se inventa una máscara para esos dos tipos — se deja tal cual.
+  formatearDocumento(input){
+    const contenedor = input.closest('.pasajero-form');
+    const selectTipo = contenedor ? contenedor.querySelector('select[data-f="tipoDocumento"]') : null;
+    const tipo = selectTipo ? selectTipo.value : '';
+    if(tipo === 'DUI'){
+      let digitos = input.value.replace(/\D/g,'').slice(0,9);
+      if(digitos.length > 8) digitos = digitos.slice(0,8) + '-' + digitos.slice(8);
+      input.value = digitos;
+    }
+  },
+
   formatearTelefono(input){
     input.value = Util.formatPhoneNumber(input.value);
   },
@@ -2812,9 +2991,9 @@ const Pago = {
         cliente_id: Estado.usuario ? Estado.usuario.id : null,
         tipo_viaje: Estado.busqueda.tipoViaje,
         total: Estado.precios.total,
-        pasajeros: Estado.pasajeros.map(p=>({nombres:p.nombres, apellidos:p.apellidos, documento:p.numeroDocumento, tipo:p.type, tipoDocumento:p.tipoDocumento})),
+        pasajeros: Estado.pasajeros.map(p=>({nombres:p.nombres, apellidos:p.apellidos, documento:p.numeroDocumento, tipo:p.type, tipoDocumento:p.tipoDocumento, nacionalidad:p.nacionalidad})),
         segmentos: segmentosPayload,
-        pago: {metodo:this.metodo, estado: resultadoPago.estado || 'APROBADO', monto: Estado.precios.total},
+        pago: {metodo:this.metodo, estado: resultadoPago.estado || 'APROBADO', monto: Estado.precios.total, ultimos4: detalle.tarjeta_terminacion || null},
         // Datos de contacto para el envío del comprobante (booking.contact)
         contacto: {
           nombre: Estado.contacto.nombre,

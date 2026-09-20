@@ -132,40 +132,71 @@ if(!$coincide){
     responderNoEncontrada();
 }
 
-// 4) Traer los segmentos reales (uno por pasajero por tramo, con su asiento real).
-$segmentos = [];
+// 4) Traer los segmentos reales (uno por pasajero por tramo, con su asiento
+//    real), y agruparlos visualmente por vuelo — SIN eliminar ni fusionar
+//    ninguna fila real de flight_segments: cada pasajero conserva su propio
+//    asiento dentro del grupo de su vuelo.
+$segmentosPlanos = [];
 $stmtSeg = mysqli_prepare($conexion,
-    "SELECT f.flight_number, f.departure_datetime, fs.seat, fs.checkin_status, fs.boarding_pass_code,
+    "SELECT f.flight_number, f.departure_datetime, f.arrival_datetime, fs.seat,
+            fs.checkin_status, fs.boarding_pass_code,
+            p.first_names, p.last_names,
             ao.iata_code AS origen_iata, ad.iata_code AS destino_iata
      FROM flight_segments fs
      INNER JOIN flights f ON f.id = fs.flight_id
      INNER JOIN routes r ON r.id = f.route_id
      INNER JOIN airports ao ON ao.id = r.origin_id
      INNER JOIN airports ad ON ad.id = r.destination_id
+     INNER JOIN passengers p ON p.id = fs.passenger_id
      WHERE fs.reservation_id = ?
-     ORDER BY f.departure_datetime ASC"
+     ORDER BY f.departure_datetime ASC, fs.id ASC"
 );
 mysqli_stmt_bind_param($stmtSeg, 'i', $reservationId);
 mysqli_stmt_execute($stmtSeg);
 $resSeg = mysqli_stmt_get_result($stmtSeg);
 while($fila = mysqli_fetch_assoc($resSeg)){
-    $segmentos[] = [
-        'numero_vuelo' => $fila['flight_number'],
-        'origen' => $fila['origen_iata'],
-        'destino' => $fila['destino_iata'],
-        'fecha' => substr((string)$fila['departure_datetime'], 0, 10),
-        'asiento' => $fila['seat'],
-        'estado_check_in' => ($fila['checkin_status'] !== 'pending') ? 1 : 0,
-        'pase_abordar_emitido' => $fila['boarding_pass_code'] !== null ? 1 : 0
-    ];
+    $segmentosPlanos[] = $fila;
 }
 if($resSeg) mysqli_free_result($resSeg);
 mysqli_stmt_close($stmtSeg);
 
-// 5) Traer el pago más reciente asociado (si existe), solo datos seguros.
+// Agrupar por vuelo (numero_vuelo + fecha) conservando el orden de aparición.
+$segmentos = [];
+$indicePorVuelo = [];
+foreach($segmentosPlanos as $fila){
+    $clave = $fila['flight_number'] . '|' . substr((string)$fila['departure_datetime'], 0, 10);
+    if(!isset($indicePorVuelo[$clave])){
+        $indicePorVuelo[$clave] = count($segmentos);
+        $segmentos[] = [
+            'numero_vuelo' => $fila['flight_number'],
+            'origen' => $fila['origen_iata'],
+            'destino' => $fila['destino_iata'],
+            'fecha' => substr((string)$fila['departure_datetime'], 0, 10),
+            'salida_programada' => $fila['departure_datetime'],
+            'llegada_programada' => $fila['arrival_datetime'],
+            // Se conserva 'asiento' (del primer pasajero del grupo) para no
+            // romper Vistas.tarjetaReserva(), que ya espera ese campo.
+            'asiento' => $fila['seat'],
+            'estado_check_in' => ($fila['checkin_status'] !== 'pending') ? 1 : 0,
+            'pase_abordar_emitido' => $fila['boarding_pass_code'] !== null ? 1 : 0,
+            'pasajeros_asientos' => []
+        ];
+    }
+    $idx = $indicePorVuelo[$clave];
+    $segmentos[$idx]['pasajeros_asientos'][] = [
+        'nombre' => trim($fila['first_names'] . ' ' . $fila['last_names']),
+        'asiento' => $fila['seat']
+    ];
+}
+
+// 5) Traer el pago PRINCIPAL (type='payment'), nunca un refund, y traducir
+//    method/status a etiquetas amigables sin inventar valores nuevos.
+$mapaMetodoPagoLabel = ['card' => 'TARJETA', 'transfer' => 'TRANSFERENCIA / BANCA ELECTRÓNICA', 'cash' => 'EFECTIVO', 'paypal' => 'PAYPAL', 'other' => 'OTRO'];
+$mapaEstadoPagoLabel = ['pending' => 'PENDIENTE', 'approved' => 'APROBADO', 'rejected' => 'RECHAZADO', 'pending_confirmation' => 'PENDIENTE DE CONFIRMACIÓN', 'refunded' => 'REEMBOLSADO', 'cancelled' => 'CANCELADO'];
+
 $pago = ['metodo' => 'N/D', 'estado' => 'N/D', 'monto' => (float)($reserva['paid_total'] ?? $reserva['estimated_total'])];
 $stmtPago = mysqli_prepare($conexion,
-    "SELECT method, status, amount FROM payments WHERE reservation_id = ? ORDER BY id DESC LIMIT 1"
+    "SELECT method, status, amount FROM payments WHERE reservation_id = ? AND type = 'payment' ORDER BY id DESC LIMIT 1"
 );
 if($stmtPago){
     mysqli_stmt_bind_param($stmtPago, 'i', $reservationId);
@@ -175,7 +206,13 @@ if($stmtPago){
     if($resPago) mysqli_free_result($resPago);
     mysqli_stmt_close($stmtPago);
     if($filaPago){
-        $pago = ['metodo' => $filaPago['method'], 'estado' => $filaPago['status'], 'monto' => (float)$filaPago['amount']];
+        $metodoReal = (string)$filaPago['method'];
+        $estadoReal2 = (string)$filaPago['status'];
+        $pago = [
+            'metodo' => $mapaMetodoPagoLabel[$metodoReal] ?? strtoupper($metodoReal),
+            'estado' => $mapaEstadoPagoLabel[$estadoReal2] ?? strtoupper($estadoReal2),
+            'monto' => (float)$filaPago['amount']
+        ];
     }
 }
 

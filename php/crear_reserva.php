@@ -251,6 +251,51 @@ try{
     $reservationId = mysqli_insert_id($conexion);
     mysqli_stmt_close($stmtRes);
 
+    // 2.5-B Insertar el pago principal en payments (misma transacción: si
+    //       falla, se revierte también la reserva recién creada). Usa
+    //       EXACTAMENTE el objeto "pago" que ya envía el frontend — no se
+    //       inventa un formato nuevo.
+    //       Mapeo de método (frontend -> payments.method real, ENUM real
+    //       confirmado: card/transfer/cash/paypal/other): el frontend hoy
+    //       solo ofrece TARJETA/TRANSFERENCIA/BILLETERA (no hay opción de
+    //       efectivo ni PayPal literal todavía), así que BILLETERA se
+    //       clasifica como 'other' (billetera digital genérica) en vez de
+    //       adivinar que es específicamente PayPal.
+    $mapaMetodoPago = ['TARJETA' => 'card', 'TRANSFERENCIA' => 'transfer', 'BILLETERA' => 'other'];
+    $pagoPayload = isset($payload['pago']) && is_array($payload['pago']) ? $payload['pago'] : [];
+    $metodoFrontend = isset($pagoPayload['metodo']) ? (string)$pagoPayload['metodo'] : '';
+    $metodoPago = $mapaMetodoPago[$metodoFrontend] ?? 'other';
+
+    // Mapeo de estado (frontend, en español -> payments.status real ENUM:
+    // pending/approved/rejected/pending_confirmation/refunded/cancelled).
+    $mapaEstadoPago = ['APROBADO' => 'approved', 'PENDIENTE' => 'pending', 'RECHAZADO' => 'rejected'];
+    $estadoFrontend = isset($pagoPayload['estado']) ? (string)$pagoPayload['estado'] : 'APROBADO';
+    $estadoPago = $mapaEstadoPago[$estadoFrontend] ?? 'approved';
+
+    $montoPago = isset($pagoPayload['monto']) && is_numeric($pagoPayload['monto']) ? (float)$pagoPayload['monto'] : $total;
+
+    // Últimos 4 dígitos únicamente (ya calculados en el frontend a partir del
+    // número de tarjeta, nunca el número completo ni el CVV). NUNCA se
+    // recibe ni se guarda el número completo de tarjeta ni el CVV — el
+    // frontend jamás los incluye en este payload.
+    $ultimos4 = null;
+    if(isset($pagoPayload['ultimos4']) && is_string($pagoPayload['ultimos4']) && preg_match('/^\d{4}$/', $pagoPayload['ultimos4'])){
+        $ultimos4 = $pagoPayload['ultimos4'];
+    }
+
+    $stmtPago = mysqli_prepare($conexion,
+        "INSERT INTO payments (reservation_id, method, type, amount, currency, status, card_last_digits, payment_date)
+         VALUES (?, ?, 'payment', ?, 'USD', ?, ?, NOW())"
+    );
+    if(!$stmtPago){
+        throw new Exception('No se pudo preparar la inserción del pago: ' . mysqli_error($conexion));
+    }
+    mysqli_stmt_bind_param($stmtPago, 'isdss', $reservationId, $metodoPago, $montoPago, $estadoPago, $ultimos4);
+    if(!mysqli_stmt_execute($stmtPago)){
+        throw new Exception('No se pudo insertar el pago: ' . mysqli_stmt_error($stmtPago));
+    }
+    mysqli_stmt_close($stmtPago);
+
     // 2.6 Insertar passengers (una fila por pasajero), con el tipo de
     //     pasajero y tipo de documento REALES que ya captura el frontend
     //     (Util.categoriaPorIndice / selector de tipoDocumento). Se mapea
@@ -287,12 +332,18 @@ try{
 
     $passengerIds = [];
     $stmtPax = mysqli_prepare($conexion,
-        "INSERT INTO passengers (reservation_id, passenger_type, first_names, last_names, document_type, document_number, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, NOW())"
+        "INSERT INTO passengers (reservation_id, passenger_type, first_names, last_names, document_type, document_number, nationality, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())"
     );
     if(!$stmtPax){
         throw new Exception('No se pudo preparar la inserción de pasajeros: ' . mysqli_error($conexion));
     }
+    $stmtPais = mysqli_prepare($conexion, "SELECT code FROM countries WHERE code = ? AND active = 1");
+    if(!$stmtPais){
+        throw new Exception('No se pudo preparar la validación de nacionalidad: ' . mysqli_error($conexion));
+    }
+    $paisesValidados = []; // caché en memoria: code => true, para no repetir la consulta si varios pasajeros comparten nacionalidad
+
     foreach($pasajeros as $p){
         $nombres = isset($p['nombres']) ? substr((string)$p['nombres'], 0, 100) : '';
         $apellidos = isset($p['apellidos']) ? substr((string)$p['apellidos'], 0, 100) : '';
@@ -309,13 +360,36 @@ try{
         }
         $tipoDocumento = $mapaTipoDocumento[$tipoDocumentoFrontend];
 
-        mysqli_stmt_bind_param($stmtPax, 'isssss', $reservationId, $passengerType, $nombres, $apellidos, $tipoDocumento, $documento);
+        // Nacionalidad: passengers.nationality guarda el código real de
+        // countries.code. Nunca se confía solo en lo que envía el frontend
+        // (el buscador de nacionalidad ya lo restringe, pero el backend
+        // vuelve a validar contra la BD real antes de guardar).
+        $codigoPais = isset($p['nacionalidad']) ? strtoupper(trim((string)$p['nacionalidad'])) : '';
+        if($codigoPais === '' || !preg_match('/^[A-Z]{2}$/', $codigoPais)){
+            throw new Exception('Nacionalidad inválida o vacía.');
+        }
+        if(!isset($paisesValidados[$codigoPais])){
+            mysqli_stmt_bind_param($stmtPais, 's', $codigoPais);
+            if(!mysqli_stmt_execute($stmtPais)){
+                throw new Exception('No se pudo validar la nacionalidad: ' . mysqli_stmt_error($stmtPais));
+            }
+            $resPais = mysqli_stmt_get_result($stmtPais);
+            $filaPais = $resPais ? mysqli_fetch_assoc($resPais) : null;
+            if($resPais) mysqli_free_result($resPais);
+            if(!$filaPais){
+                throw new Exception('Código de país no válido o inactivo: ' . $codigoPais);
+            }
+            $paisesValidados[$codigoPais] = true;
+        }
+
+        mysqli_stmt_bind_param($stmtPax, 'issssss', $reservationId, $passengerType, $nombres, $apellidos, $tipoDocumento, $documento, $codigoPais);
         if(!mysqli_stmt_execute($stmtPax)){
             throw new Exception('No se pudo insertar un pasajero: ' . mysqli_stmt_error($stmtPax));
         }
         $passengerIds[] = mysqli_insert_id($conexion);
     }
     mysqli_stmt_close($stmtPax);
+    mysqli_stmt_close($stmtPais);
 
     // 2.7 Insertar flight_segments (una fila por pasajero por segmento).
     $stmtSeg = mysqli_prepare($conexion,

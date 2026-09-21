@@ -280,6 +280,244 @@ function montoEnLetras($total){
 $totalFormateado = number_format($total, 2, '.', ',');
 $totalEnLetras = montoEnLetras($total);
 
+// =========================================================================
+// GENERADOR DE PDF — sin librerías externas (no existe ninguna en el
+// proyecto: sin Composer, Dockerfile solo instala mysqli). Se escribe el
+// documento PDF byte a byte, usando únicamente fuentes estándar de PDF
+// (Helvetica / Helvetica-Bold), que no requieren embeber ningún archivo de
+// fuente — cualquier lector de PDF las soporta de forma nativa. Esto evita
+// agregar cualquier dependencia nueva y funciona igual en Render que en
+// XAMPP, sin tocar el Dockerfile.
+// =========================================================================
+
+/**
+ * Convierte UTF-8 a Latin-1/CP1252 de forma segura y sin depender de
+ * mbstring ni iconv (ninguno de los dos está garantizado en este entorno,
+ * ver aprendizajes previos del proyecto). Cubre exactamente el rango que
+ * necesitan los acentos/ñ del español (U+0080–U+00FF). Los caracteres
+ * fuera de ese rango se sustituyen por '?', nunca se inventan datos.
+ */
+function utf8ALatin1Seguro($texto){
+    $resultado = '';
+    $len = strlen($texto);
+    for($i = 0; $i < $len; $i++){
+        $byte = ord($texto[$i]);
+        if($byte < 0x80){
+            $resultado .= $texto[$i];
+        } elseif(($byte & 0xE0) === 0xC0 && $i + 1 < $len){
+            $byte2 = ord($texto[$i + 1]);
+            $codepoint = (($byte & 0x1F) << 6) | ($byte2 & 0x3F);
+            $resultado .= ($codepoint <= 0xFF) ? chr($codepoint) : '?';
+            $i++;
+        } else {
+            $resultado .= '?';
+        }
+    }
+    return $resultado;
+}
+
+/** Escapa un texto para insertarlo de forma segura dentro de "(...)" en un content stream PDF. */
+function pdfEscaparTexto($texto){
+    $texto = utf8ALatin1Seguro((string)$texto);
+    return str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], $texto);
+}
+
+/**
+ * Genera el PDF completo del comprobante como una cadena de bytes binaria
+ * lista para adjuntar. Construye una lista de "líneas" (texto/fuente/
+ * tamaño/color/separador) y las va colocando en páginas A4, abriendo una
+ * página nueva automáticamente cuando el contenido no cabe — sin límite
+ * artificial de segmentos/pasajeros distinto al que ya valida este mismo
+ * archivo más arriba (máx. 10 segmentos, máx. 20 pasajeros).
+ *
+ * @param array $datos ['pnr','nombreCliente','email','estado','segmentos'
+ *                       (payload real, con asientos por pasajero si vienen),
+ *                       'pasajeros' (payload real), 'pagoMetodo','pagoEstado',
+ *                       'totalFormateado','totalEnLetras']
+ * @return string bytes del PDF
+ */
+function construirPdfComprobante($datos){
+    $anchoPagina = 595.28; $altoPagina = 841.89; // A4 en puntos
+    $margenIzq = 42; $margenDer = 42;
+    $altoBanda = 64;
+    $margenInferior = 56;
+    $colorCorporativo = [0.043, 0.239, 0.388]; // mismo azul del correo HTML (#0b3d63)
+    $colorGris = [0.34, 0.38, 0.44];
+    $colorNegro = [0.1, 0.12, 0.16];
+
+    // ---- 1) Construir la lista plana de líneas a dibujar ----
+    $lineas = [];
+    $agregar = function($texto, $fuente = 'F1', $tam = 10, $color = null, $espacioAntes = 4, $indent = 0) use (&$lineas, $colorNegro){
+        $lineas[] = ['tipo' => 'texto', 'texto' => (string)$texto, 'fuente' => $fuente, 'tam' => $tam,
+                      'color' => $color ?? $colorNegro, 'espacioAntes' => $espacioAntes, 'indent' => $indent];
+    };
+    $separador = function($espacioAntes = 8) use (&$lineas){
+        $lineas[] = ['tipo' => 'separador', 'espacioAntes' => $espacioAntes];
+    };
+
+    $fechaEmision = date('d/m/Y H:i');
+
+    $agregar('COMPROBANTE DE RESERVA Y BILLETE ELECTRÓNICO', 'F2', 14, $colorCorporativo, 0);
+    $agregar('Código de reserva (PNR): ' . $datos['pnr'], 'F2', 12, $colorNegro, 6);
+    $agregar('Fecha de emisión: ' . $fechaEmision, 'F1', 9, $colorGris, 2);
+    $separador(10);
+
+    $agregar('DATOS DEL CLIENTE', 'F2', 11, $colorCorporativo, 0);
+    $agregar('Cliente: ' . $datos['nombreCliente'], 'F1', 10, $colorNegro, 6);
+    $agregar('Correo de contacto: ' . $datos['email'], 'F1', 10, $colorNegro, 3);
+    $agregar('Estado de la reserva: ' . $datos['estado'], 'F1', 10, $colorNegro, 3);
+    $separador(10);
+
+    $agregar('ITINERARIO', 'F2', 11, $colorCorporativo, 0);
+    foreach($datos['segmentos'] as $seg){
+        if(!is_array($seg)) continue;
+        $numeroVuelo = $seg['numero_vuelo'] ?? '-';
+        $origen = $seg['origen'] ?? '-';
+        $destino = $seg['destino'] ?? '-';
+        $fecha = $seg['fecha'] ?? '-';
+        $agregar('Vuelo ' . $numeroVuelo . '  ·  ' . $origen . ' -> ' . $destino, 'F2', 10.5, $colorNegro, 8);
+        $agregar('Fecha: ' . $fecha, 'F1', 9.5, $colorGris, 2, 8);
+        if(isset($seg['fare_class']) && $seg['fare_class'] !== ''){
+            $agregar('Clase/tarifa: ' . $seg['fare_class'], 'F1', 9.5, $colorGris, 1, 8);
+        }
+        // Un asiento por pasajero si el payload trae el arreglo por
+        // pasajero (asientos[]); si no, se usa el campo simple existente.
+        if(isset($seg['asientos']) && is_array($seg['asientos']) && isset($datos['pasajeros']) && is_array($datos['pasajeros'])){
+            foreach($seg['asientos'] as $idx => $asientoPax){
+                $pax = $datos['pasajeros'][$idx] ?? null;
+                $nombrePax = $pax ? trim(($pax['nombres'] ?? '') . ' ' . ($pax['apellidos'] ?? '')) : ('Pasajero ' . ($idx + 1));
+                $agregar('- ' . $nombrePax . '  ·  Asiento: ' . ($asientoPax ?: 'No requiere asiento'), 'F1', 9.5, $colorNegro, 1, 14);
+            }
+        } elseif(!empty($seg['asiento'])){
+            $agregar('Asiento: ' . $seg['asiento'], 'F1', 9.5, $colorNegro, 1, 14);
+        }
+    }
+    $separador(10);
+
+    $agregar('PASAJEROS', 'F2', 11, $colorCorporativo, 0);
+    foreach($datos['pasajeros'] as $p){
+        if(!is_array($p)) continue;
+        $nombreCompleto = trim(($p['nombres'] ?? '') . ' ' . ($p['apellidos'] ?? ''));
+        $linea = $nombreCompleto;
+        if(!empty($p['tipo'])) $linea .= '  ·  Tipo: ' . $p['tipo'];
+        if(!empty($p['documento'])) $linea .= '  ·  Documento: ' . $p['documento'];
+        if(!empty($p['nacionalidad'])) $linea .= '  ·  Nacionalidad: ' . $p['nacionalidad'];
+        $agregar($linea, 'F1', 9.5, $colorNegro, 5);
+    }
+    $separador(10);
+
+    $agregar('PAGO', 'F2', 11, $colorCorporativo, 0);
+    $pagoMetodoPdf = is_array($datos['pago'] ?? null) ? ($datos['pago']['metodo'] ?? 'N/D') : 'N/D';
+    $pagoEstadoPdf = is_array($datos['pago'] ?? null) ? ($datos['pago']['estado'] ?? 'N/D') : 'N/D';
+    $agregar('Método: ' . $pagoMetodoPdf, 'F1', 10, $colorNegro, 6);
+    $agregar('Estado del pago: ' . $pagoEstadoPdf, 'F1', 10, $colorNegro, 3);
+    $separador(10);
+
+    $agregar('TOTAL', 'F2', 11, $colorCorporativo, 0);
+    $agregar('Total: $' . $datos['totalFormateado'] . ' USD', 'F2', 12, $colorNegro, 6);
+    $agregar('Total en letras: ' . $datos['totalEnLetras'], 'F1', 9.5, $colorGris, 3);
+
+    // ---- 2) Paginar: colocar cada línea en páginas A4 ----
+    $paginas = []; // cada elemento: array de líneas ya con su 'y' calculado
+    $paginaActual = [];
+    $y = $altoPagina - $altoBanda - 34;
+    foreach($lineas as $l){
+        $alturaLinea = ($l['tipo'] === 'separador') ? $l['espacioAntes'] + 6 : ($l['tam'] * 1.35 + $l['espacioAntes']);
+        if($y - $alturaLinea < $margenInferior){
+            $paginas[] = $paginaActual;
+            $paginaActual = [];
+            $y = $altoPagina - $altoBanda - 34;
+        }
+        $y -= $alturaLinea;
+        $l['y'] = $y;
+        $paginaActual[] = $l;
+    }
+    if(!empty($paginaActual)) $paginas[] = $paginaActual;
+    if(empty($paginas)) $paginas[] = [];
+
+    // ---- 3) Construir el content stream de cada página ----
+    $streamsPaginas = [];
+    foreach($paginas as $indicePagina => $lineasPagina){
+        $stream = '';
+        // Banda de encabezado corporativa (se repite en cada página).
+        $stream .= sprintf("%.3F %.3F %.3F rg\n0 %.2F %.2F %.2F re f\n",
+            $colorCorporativo[0], $colorCorporativo[1], $colorCorporativo[2],
+            $altoPagina - $altoBanda, $anchoPagina, $altoBanda);
+        $stream .= "1 1 1 rg\nBT /F2 16 Tf 1 0 0 1 " . $margenIzq . " " . ($altoPagina - 38) . " Tm (ACAJUTLA AIRLINES) Tj ET\n";
+        $stream .= "BT /F1 9 Tf 1 0 0 1 " . $margenIzq . " " . ($altoPagina - 54) . " Tm (Comprobante de reserva electronico) Tj ET\n";
+
+        foreach($lineasPagina as $l){
+            if($l['tipo'] === 'separador'){
+                $yLinea = $l['y'] + 3;
+                $stream .= sprintf("%.3F %.3F %.3F RG\n%.2F %.2F m %.2F %.2F l S\n",
+                    0.82, 0.85, 0.88, $margenIzq, $yLinea, $anchoPagina - $margenDer, $yLinea);
+                continue;
+            }
+            $x = $margenIzq + $l['indent'];
+            $stream .= sprintf("%.3F %.3F %.3F rg\nBT /%s %.1F Tf 1 0 0 1 %.2F %.2F Tm (%s) Tj ET\n",
+                $l['color'][0], $l['color'][1], $l['color'][2], $l['fuente'], $l['tam'], $x, $l['y'], pdfEscaparTexto($l['texto']));
+        }
+        $streamsPaginas[] = $stream;
+    }
+
+    // ---- 4) Ensamblar el archivo PDF (objetos, xref, trailer) ----
+    $numPaginas = count($streamsPaginas);
+    // Numeración de objetos: 1=Catalog, 2=Pages, 3=F1, 4=F2,
+    // luego por cada página: (Page, Contents) en pares consecutivos.
+    $objetos = [];
+    $idPagesKids = [];
+    $primerObjetoPagina = 5;
+    for($i = 0; $i < $numPaginas; $i++){
+        $idPagina = $primerObjetoPagina + ($i * 2);
+        $idContenido = $idPagina + 1;
+        $idPagesKids[] = $idPagina;
+    }
+    $kidsRefs = implode(' ', array_map(fn($id) => $id . ' 0 R', $idPagesKids));
+
+    $objetos[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+    $objetos[2] = "<< /Type /Pages /Kids [$kidsRefs] /Count $numPaginas >>";
+    $objetos[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+    $objetos[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>";
+
+    for($i = 0; $i < $numPaginas; $i++){
+        $idPagina = $primerObjetoPagina + ($i * 2);
+        $idContenido = $idPagina + 1;
+        $objetos[$idPagina] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " . $anchoPagina . " " . $altoPagina . "] "
+            . "/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents " . $idContenido . " 0 R >>";
+        $stream = $streamsPaginas[$i];
+        $objetos[$idContenido] = "STREAM::" . $stream; // marcador especial, se serializa distinto (stream binario)
+    }
+
+    // ---- 5) Serializar a bytes con offsets reales para el xref ----
+    $pdf = "%PDF-1.4\n";
+    $offsets = [0 => 0]; // el objeto 0 siempre es libre, offset 0
+    ksort($objetos);
+    foreach($objetos as $id => $cuerpo){
+        $offsets[$id] = strlen($pdf);
+        if(strpos($cuerpo, 'STREAM::') === 0){
+            $contenidoStream = substr($cuerpo, strlen('STREAM::'));
+            $pdf .= $id . " 0 obj\n<< /Length " . strlen($contenidoStream) . " >>\nstream\n" . $contenidoStream . "endstream\nendobj\n";
+        } else {
+            $pdf .= $id . " 0 obj\n" . $cuerpo . "\nendobj\n";
+        }
+    }
+
+    $totalObjetos = max(array_keys($objetos)) + 1;
+    $offsetXref = strlen($pdf);
+    $pdf .= "xref\n0 " . $totalObjetos . "\n";
+    $pdf .= "0000000000 65535 f \n";
+    for($id = 1; $id < $totalObjetos; $id++){
+        if(isset($offsets[$id])){
+            $pdf .= sprintf("%010d 00000 n \n", $offsets[$id]);
+        } else {
+            $pdf .= "0000000000 00000 f \n";
+        }
+    }
+    $pdf .= "trailer\n<< /Size " . $totalObjetos . " /Root 1 0 R >>\nstartxref\n" . $offsetXref . "\n%%EOF";
+
+    return $pdf;
+}
+
 $htmlCorreo = '<!DOCTYPE html>
 <html lang="es">
 <head><meta charset="UTF-8"></head>
@@ -338,6 +576,7 @@ $asunto = 'Acajutla Airlines - Comprobante de reserva ' . $pnr;
 // 5. Registrar en email_outbox como 'pending' ANTES de intentar enviar
 // -----------------------------------------------------------------------
 require_once __DIR__ . '/conexion.php';
+require_once __DIR__ . '/pdf_comprobante.php';
 
 if(!CONEXION_OK){
     responderJson(500, ['success' => false, 'message' => 'No pudimos enviar el comprobante. Intenta nuevamente.']);
@@ -468,7 +707,7 @@ function postJsonHttps($url, array $headers, $cuerpoJson, $timeoutSegundos = 15)
  * Lanza Exception con detalle técnico en caso contrario (el caller decide
  * qué guardar en email_outbox.error_msg y qué mostrar al usuario).
  */
-function enviarCorreoNylas($apiKey, $grantId, $destinatario, $asunto, $htmlBody){
+function enviarCorreoNylas($apiKey, $grantId, $destinatario, $asunto, $htmlBody, $adjuntoPdfBase64 = null, $nombreArchivoPdf = null){
     $cuerpo = [
         'subject' => $asunto,
         'to'      => [['email' => $destinatario]],
@@ -477,6 +716,19 @@ function enviarCorreoNylas($apiKey, $grantId, $destinatario, $asunto, $htmlBody)
         // Nylas): el body se envía como HTML real, nunca como texto plano.
         'is_plaintext' => false,
     ];
+
+    // PDF adjunto real (no un enlace ni texto/base64 visible en el correo):
+    // formato oficial de Nylas v3 — content_type + filename + content
+    // (base64). Opcional: si no se pudo generar el PDF, el correo se envía
+    // igual, sin adjunto, para no romper el envío del resumen HTML.
+    if($adjuntoPdfBase64 !== null && $nombreArchivoPdf !== null){
+        $cuerpo['attachments'] = [[
+            'content_type' => 'application/pdf',
+            'filename' => $nombreArchivoPdf,
+            'content' => $adjuntoPdfBase64,
+        ]];
+    }
+
     $cuerpoJson = json_encode($cuerpo, JSON_UNESCAPED_UNICODE);
 
     $headers = [
@@ -523,7 +775,37 @@ if(!$nylasApiKey || !$nylasGrantId){
 }
 
 try{
-    $nylasMessageId = enviarCorreoNylas($nylasApiKey, $nylasGrantId, $email, $asunto, $htmlCorreo);
+    // Genera el PDF real reutilizando exactamente los mismos datos/valores
+    // ya validados y calculados arriba — no se duplica ninguna lógica de
+    // total, total en letras, ni datos de la reserva.
+    $adjuntoPdfBase64 = null;
+    $nombreArchivoPdf = null;
+    try{
+        $datosPdf = [
+            'pnr' => $pnr,
+            'email' => $email,
+            'nombreCliente' => $nombreCliente,
+            'estado' => $estadoReserva,
+            'total' => $total,
+            'totalFormateado' => $totalFormateado,
+            'totalEnLetras' => $totalEnLetras,
+            'segmentos' => $payload['segmentos'],
+            'pasajeros' => $payload['pasajeros'],
+            'pago' => ['metodo' => $pagoMetodo, 'estado' => $pagoEstado],
+        ];
+        $bytesPdf = construirPdfComprobante($datosPdf);
+        $adjuntoPdfBase64 = base64_encode($bytesPdf);
+        // Nombre profesional con el PNR real de la reserva.
+        $nombreArchivoPdf = 'Acajutla_Airlines_Reserva_' . preg_replace('/[^A-Za-z0-9]/', '', $pnr) . '.pdf';
+    } catch(Exception $ePdf){
+        // Si el PDF falla por cualquier motivo, el correo HTML se envía
+        // igual, sin adjunto — nunca se rompe el envío actual por esto.
+        error_log('[Acajutla Airlines] No se pudo generar el PDF del comprobante: ' . $ePdf->getMessage());
+        $adjuntoPdfBase64 = null;
+        $nombreArchivoPdf = null;
+    }
+
+    $nylasMessageId = enviarCorreoNylas($nylasApiKey, $nylasGrantId, $email, $asunto, $htmlCorreo, $adjuntoPdfBase64, $nombreArchivoPdf);
     actualizarEstadoEnvio($conexion, $emailOutboxId, 'sent', null, $nylasMessageId);
     cerrarConexion();
     responderJson(200, ['success' => true, 'message' => 'Comprobante enviado correctamente.']);

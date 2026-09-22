@@ -56,6 +56,17 @@
  * =====================================================================
  */
 
+// Blindaje contra cualquier salida accidental (warnings/notices de PHP)
+// contaminando el JSON — mismo patrón ya usado en asientos_ocupados.php.
+// date.timezone puede no estar configurado en el php.ini del contenedor;
+// sin fijarlo explícitamente, date() emite un warning que se imprime antes
+// del JSON y rompe la respuesta (causa real de este incidente: se agregó
+// una llamada nueva a date() en la generación del PDF).
+date_default_timezone_set('America/El_Salvador');
+ini_set('display_errors', '0');
+error_reporting(E_ALL);
+ob_start();
+
 header('Content-Type: application/json; charset=utf-8');
 
 // -----------------------------------------------------------------------
@@ -64,6 +75,7 @@ header('Content-Type: application/json; charset=utf-8');
 const NYLAS_API_BASE = 'https://api.us.nylas.com/v3';
 
 function responderJson($codigoHttp, $body){
+    if(ob_get_level() > 0){ ob_clean(); }
     http_response_code($codigoHttp);
     echo json_encode($body, JSON_UNESCAPED_UNICODE);
     exit;

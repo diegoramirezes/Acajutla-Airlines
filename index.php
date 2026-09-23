@@ -3281,10 +3281,17 @@ const Auth = {
       cont.innerHTML = `<div class="alerta alerta-error">⚠ ${res.mensaje||'No se pudo iniciar sesión.'}</div>`;
       return;
     }
-    Estado.usuario = res.cliente;
-    document.getElementById('btnAuthNav').textContent = res.cliente.nombre;
-    document.getElementById('btnAuthNav').onclick = ()=>Navegacion.ir('perfil');
-    Util.mostrarToast('Bienvenido, '+res.cliente.nombre, 'exito');
+    this._aplicarSesion(res.cliente, 'Bienvenido, ' + res.cliente.nombre);
+  },
+
+  _aplicarSesion(cliente, mensajeToast){
+    Estado.usuario = cliente;
+    const btnNav = document.getElementById('btnAuthNav');
+    if(btnNav){
+      btnNav.textContent = cliente.nombre || cliente.correo || 'Mi cuenta';
+      btnNav.onclick = ()=>Navegacion.ir('perfil');
+    }
+    if(mensajeToast) Util.mostrarToast(mensajeToast, 'exito');
     Navegacion.ir('perfil');
   },
 
@@ -3312,15 +3319,18 @@ const Auth = {
       cont.innerHTML = `<div class="alerta alerta-error">⚠ ${res.mensaje}</div>`;
       return;
     }
-    Estado.usuario = res.cliente;
-    Util.mostrarToast('Cuenta creada correctamente', 'exito');
-    Navegacion.ir('perfil');
+    // Iniciar sesión automáticamente al crear la cuenta
+    this._aplicarSesion(res.cliente, '¡Cuenta creada! Bienvenido, ' + res.cliente.nombre);
   },
 
   logout(){
     Estado.usuario = null;
-    document.getElementById('btnAuthNav').textContent = 'Iniciar sesión';
-    document.getElementById('btnAuthNav').onclick = ()=>Navegacion.ir('login');
+    const btnNav = document.getElementById('btnAuthNav');
+    if(btnNav){
+      btnNav.textContent = 'Iniciar sesión';
+      btnNav.onclick = ()=>Navegacion.ir('login');
+    }
+    Util.mostrarToast('Sesión cerrada', 'info');
     Navegacion.ir('inicio');
   },
 

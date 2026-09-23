@@ -727,7 +727,9 @@ const API_CONFIG = {
   get ENDPOINT_MIS_RESERVAS_REAL(){ return this.rutaBaseApp() + 'php/mis_reservas.php'; },
   get ENDPOINT_CONSULTAR_RESERVA_REAL(){ return this.rutaBaseApp() + 'php/consultar_reserva.php'; },
   get ENDPOINT_ESTADO_VUELO_REAL(){ return this.rutaBaseApp() + 'php/estado_vuelo.php'; },
-  get ENDPOINT_PAISES_REAL(){ return this.rutaBaseApp() + 'php/paises.php'; }
+  get ENDPOINT_PAISES_REAL(){ return this.rutaBaseApp() + 'php/paises.php'; },
+  get ENDPOINT_RECUPERAR_REAL(){ return this.rutaBaseApp() + 'php/auth_recuperar.php'; },
+  get ENDPOINT_RESET_PASSWORD_REAL(){ return this.rutaBaseApp() + 'php/auth_reset_password.php'; }
 };
 
 /* -----------------------------------------------------------------------
@@ -3355,22 +3357,94 @@ const Auth = {
       if(alerta) alerta.innerHTML = `<div class="alerta alerta-error">⚠ Ingresa un correo válido.</div>`;
       return;
     }
-    if(alerta) alerta.innerHTML = `<div class="alerta alerta-info">⏳ Procesando...</div>`;
+    if(alerta) alerta.innerHTML = `<div class="alerta alerta-info">⏳ Enviando instrucciones a tu correo...</div>`;
     try{
-      const res = await fetch('api.php?action=recuperar_password', {
+      const res = await fetch(API_CONFIG.ENDPOINT_RECUPERAR_REAL, {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({correo})
       });
       const data = await res.json();
       if(data.ok){
-        if(alerta) alerta.innerHTML = `<div class="alerta alerta-exito">✅ Si el correo existe en nuestros registros, recibirás las instrucciones en breve.</div>`;
-        Util.mostrarToast('Instrucciones enviadas (si el correo existe)', 'exito');
+        if(alerta) alerta.innerHTML = `<div class="alerta alerta-exito">✅ Si el correo existe en nuestros registros, recibirás las instrucciones en breve. Revisa también tu carpeta de spam.</div>`;
+        Util.mostrarToast('Instrucciones enviadas', 'exito');
       } else {
-        if(alerta) alerta.innerHTML = `<div class="alerta alerta-exito">✅ Si el correo existe en nuestros registros, recibirás las instrucciones en breve.</div>`;
+        if(alerta) alerta.innerHTML = `<div class="alerta alerta-error">⚠ ${Util.escapeHtml(data.mensaje || 'No se pudo procesar la solicitud.')}</div>`;
       }
     } catch(e){
-      if(alerta) alerta.innerHTML = `<div class="alerta alerta-exito">✅ Si el correo existe en nuestros registros, recibirás las instrucciones en breve.</div>`;
+      if(alerta) alerta.innerHTML = `<div class="alerta alerta-error">⚠ Error de conexión al procesar la solicitud.</div>`;
+    }
+  },
+
+  abrirResetPassword(token){
+    let overlay = document.getElementById('modalResetPassword');
+    if(!overlay){
+      overlay = document.createElement('div');
+      overlay.id = 'modalResetPassword';
+      overlay.className = 'modal-recuperar-overlay';
+      overlay.innerHTML = `
+        <div class="modal-recuperar-box">
+          <button class="modal-recuperar-cerrar" onclick="Auth.cerrarResetPassword()" aria-label="Cerrar">✕</button>
+          <h3 style="color:var(--azul-oscuro);margin-bottom:8px">🔒 Nueva contraseña</h3>
+          <p style="font-size:.85rem;color:#889;margin-bottom:16px">Ingresa tu nueva contraseña para acceder a Acajutla Airlines.</p>
+          <div id="alertaResetPassword"></div>
+          <input type="hidden" id="resetTokenVal" value="">
+          <div class="campo-form" style="margin-bottom:12px">
+            <label>Nueva contraseña (mínimo 6 caracteres)</label>
+            <input type="password" id="resetNuevaPassword" placeholder="••••••">
+          </div>
+          <div class="campo-form" style="margin-bottom:16px">
+            <label>Confirmar contraseña</label>
+            <input type="password" id="resetConfirmarPassword" placeholder="••••••" onkeydown="if(event.key==='Enter') Auth.guardarNuevaPassword()">
+          </div>
+          <button class="btn btn-primario btn-block" onclick="Auth.guardarNuevaPassword()">Guardar contraseña</button>
+        </div>`;
+      document.body.appendChild(overlay);
+    }
+    document.getElementById('resetTokenVal').value = token;
+    overlay.style.display = 'flex';
+    setTimeout(()=>{ const el = document.getElementById('resetNuevaPassword'); if(el) el.focus(); }, 80);
+  },
+
+  cerrarResetPassword(){
+    const overlay = document.getElementById('modalResetPassword');
+    if(overlay) overlay.style.display = 'none';
+    // Limpiar url param para que no vuelva a abrirse
+    window.history.replaceState({}, document.title, window.location.pathname);
+  },
+
+  async guardarNuevaPassword(){
+    const token = document.getElementById('resetTokenVal')?.value;
+    const p1 = document.getElementById('resetNuevaPassword')?.value;
+    const p2 = document.getElementById('resetConfirmarPassword')?.value;
+    const alerta = document.getElementById('alertaResetPassword');
+
+    if(!p1 || p1.length < 6){
+      if(alerta) alerta.innerHTML = `<div class="alerta alerta-error">⚠ La contraseña debe tener al menos 6 caracteres.</div>`;
+      return;
+    }
+    if(p1 !== p2){
+      if(alerta) alerta.innerHTML = `<div class="alerta alerta-error">⚠ Las contraseñas no coinciden.</div>`;
+      return;
+    }
+
+    if(alerta) alerta.innerHTML = `<div class="alerta alerta-info">⏳ Guardando nueva contraseña...</div>`;
+    try{
+      const res = await fetch(API_CONFIG.ENDPOINT_RESET_PASSWORD_REAL, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({token, password: p1})
+      });
+      const data = await res.json();
+      if(data.ok){
+        Util.mostrarToast('Contraseña restablecida con éxito', 'exito');
+        Auth.cerrarResetPassword();
+        Navegacion.ir('login');
+      } else {
+        if(alerta) alerta.innerHTML = `<div class="alerta alerta-error">⚠ ${Util.escapeHtml(data.mensaje || 'Error al actualizar contraseña.')}</div>`;
+      }
+    } catch(e){
+      if(alerta) alerta.innerHTML = `<div class="alerta alerta-error">⚠ Error de red al comunicarse con el servidor.</div>`;
     }
   }
 };
@@ -3483,6 +3557,13 @@ async function cargarAeropuertosReales(){
 (function init(){
   Navegacion.ir('inicio', {silencioso:true});
   cargarAeropuertosReales();
+
+  // Si la URL contiene un token de restablecimiento (?reset_token=...), abrir el modal
+  const urlParams = new URLSearchParams(window.location.search);
+  const resetToken = urlParams.get('reset_token');
+  if(resetToken){
+    setTimeout(()=>{ Auth.abrirResetPassword(resetToken); }, 200);
+  }
 })();
 </script>
 </body>

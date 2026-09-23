@@ -76,7 +76,6 @@ if(!$usuario){
 
 // 2. Generar token criptográfico único
 $token = bin2hex(random_bytes(32));
-$expira = date('Y-m-d H:i:s', strtotime('+1 hour'));
 
 // Limpiar tokens anteriores para este correo
 $stmtDel = mysqli_prepare($conexion, "DELETE FROM password_resets WHERE email = ?");
@@ -86,14 +85,14 @@ if($stmtDel){
     mysqli_stmt_close($stmtDel);
 }
 
-// Guardar nuevo token
-$stmtIns = mysqli_prepare($conexion, "INSERT INTO password_resets (email, token, expires_at) VALUES (?, ?, ?)");
+// Guardar nuevo token usando la hora del servidor MySQL para evitar desfases de zona horaria
+$stmtIns = mysqli_prepare($conexion, "INSERT INTO password_resets (email, token, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 2 HOUR))");
 if(!$stmtIns){
     error_log('[Recuperar Password] Error guardar token: ' . mysqli_error($conexion));
     cerrarConexion();
     responderJson(200, ['ok' => true]);
 }
-mysqli_stmt_bind_param($stmtIns, 'sss', $correo, $token, $expira);
+mysqli_stmt_bind_param($stmtIns, 'ss', $correo, $token);
 mysqli_stmt_execute($stmtIns);
 mysqli_stmt_close($stmtIns);
 

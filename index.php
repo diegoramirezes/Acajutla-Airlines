@@ -3391,17 +3391,25 @@ const Auth = {
           <input type="hidden" id="resetTokenVal" value="">
           <div class="campo-form" style="margin-bottom:12px">
             <label>Nueva contraseña (mínimo 6 caracteres)</label>
-            <input type="password" id="resetNuevaPassword" placeholder="••••••">
+            <div style="position:relative">
+              <input type="password" id="resetNuevaPassword" placeholder="••••••" style="width:100%;padding-right:40px;box-sizing:border-box" onkeydown="Util.handleEnter(event,'resetConfirmarPassword')">
+              <button type="button" onclick="Util.togglePasswordVisibility('resetNuevaPassword', this)" aria-label="Mostrar contraseña" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:1rem;padding:4px">👁️</button>
+            </div>
           </div>
           <div class="campo-form" style="margin-bottom:16px">
             <label>Confirmar contraseña</label>
-            <input type="password" id="resetConfirmarPassword" placeholder="••••••" onkeydown="if(event.key==='Enter') Auth.guardarNuevaPassword()">
+            <div style="position:relative">
+              <input type="password" id="resetConfirmarPassword" placeholder="••••••" style="width:100%;padding-right:40px;box-sizing:border-box" onkeydown="Util.handleEnter(event,null,Auth.guardarNuevaPassword.bind(Auth))">
+              <button type="button" onclick="Util.togglePasswordVisibility('resetConfirmarPassword', this)" aria-label="Mostrar contraseña" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:1rem;padding:4px">👁️</button>
+            </div>
           </div>
           <button class="btn btn-primario btn-block" onclick="Auth.guardarNuevaPassword()">Guardar contraseña</button>
         </div>`;
       document.body.appendChild(overlay);
     }
     document.getElementById('resetTokenVal').value = token;
+    const alerta = document.getElementById('alertaResetPassword');
+    if(alerta) alerta.innerHTML = '';
     overlay.style.display = 'flex';
     setTimeout(()=>{ const el = document.getElementById('resetNuevaPassword'); if(el) el.focus(); }, 80);
   },
@@ -3409,8 +3417,6 @@ const Auth = {
   cerrarResetPassword(){
     const overlay = document.getElementById('modalResetPassword');
     if(overlay) overlay.style.display = 'none';
-    // Limpiar url param para que no vuelva a abrirse
-    window.history.replaceState({}, document.title, window.location.pathname);
   },
 
   async guardarNuevaPassword(){
@@ -3439,6 +3445,7 @@ const Auth = {
       if(data.ok){
         Util.mostrarToast('Contraseña restablecida con éxito', 'exito');
         Auth.cerrarResetPassword();
+        window.history.replaceState({}, document.title, window.location.pathname);
         Navegacion.ir('login');
       } else {
         if(alerta) alerta.innerHTML = `<div class="alerta alerta-error">⚠ ${Util.escapeHtml(data.mensaje || 'Error al actualizar contraseña.')}</div>`;

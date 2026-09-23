@@ -580,6 +580,23 @@ a{text-decoration:none;color:inherit;}
   .tramo{flex-direction:column;}
   .pasajeros-panel{width:min(280px,86vw);max-height:min(60vh,380px);}
 }
+
+/* === RECUPERAR CONTRASEÑA === */
+.link-olvido{font-size:.82rem;color:var(--azul);cursor:pointer;text-decoration:underline;}
+.link-olvido:hover{color:var(--azul-oscuro);}
+.modal-recuperar-overlay{
+  display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);
+  z-index:3000;align-items:center;justify-content:center;padding:20px;
+}
+.modal-recuperar-box{
+  background:#fff;border-radius:16px;padding:28px 30px;max-width:420px;width:100%;
+  box-shadow:0 12px 40px rgba(0,40,85,.22);position:relative;
+}
+.modal-recuperar-cerrar{
+  position:absolute;top:12px;right:14px;font-size:1.1rem;
+  color:#889;cursor:pointer;background:none;border:none;line-height:1;
+}
+.modal-recuperar-cerrar:hover{color:var(--rojo);}
 </style>
 </head>
 <body>
@@ -1214,6 +1231,19 @@ const Util = {
     } finally {
       const o=document.getElementById('loaderGlobal');
       if(o) o.remove();
+    }
+  },
+
+  // Mueve el foco al campo "siguienteId" al presionar Enter.
+  // Si siguienteId es null llama a la función acción (si se pasó).
+  handleEnter(e, siguienteId, accion){
+    if(e.key !== 'Enter') return;
+    e.preventDefault();
+    if(siguienteId){
+      const el = document.getElementById(siguienteId);
+      if(el){ el.focus(); el.select && el.select(); }
+    } else if(typeof accion === 'function'){
+      accion();
     }
   }
 };
@@ -2322,13 +2352,16 @@ const Vistas = {
         <div class="card">
           <p style="font-size:.75rem;color:#889;margin-bottom:14px">Proyecto académico — Acajutla Airlines.</p>
           <div id="alertaLogin"></div>
-          <div class="campo-form" style="margin-bottom:12px"><label>Correo</label><input type="email" id="loginCorreo" placeholder="tu@correo.com"></div>
-          <div class="campo-form" style="margin-bottom:16px">
+          <div class="campo-form" style="margin-bottom:12px"><label>Correo</label><input type="email" id="loginCorreo" placeholder="tu@correo.com" onkeydown="Util.handleEnter(event,'loginPassword')"></div>
+          <div class="campo-form" style="margin-bottom:8px">
             <label>Contraseña</label>
             <div style="position:relative">
-              <input type="password" id="loginPassword" placeholder="••••••" style="width:100%;padding-right:40px;box-sizing:border-box">
+              <input type="password" id="loginPassword" placeholder="••••••" style="width:100%;padding-right:40px;box-sizing:border-box" onkeydown="Util.handleEnter(event,null,Auth.login.bind(Auth))">
               <button type="button" onclick="Util.togglePasswordVisibility('loginPassword', this)" aria-label="Mostrar contraseña" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:1rem;padding:4px">👁️</button>
             </div>
+          </div>
+          <div style="text-align:right;margin-bottom:16px">
+            <a class="link-olvido" onclick="Auth.abrirRecuperar()">¿Olvidaste tu contraseña?</a>
           </div>
           <button class="btn btn-primario btn-block" onclick="Auth.login()">Ingresar</button>
         </div>
@@ -2346,22 +2379,22 @@ const Vistas = {
         </div>
         <div class="card">
           <div id="alertaRegistro"></div>
-          <div class="campo-form" style="margin-bottom:12px"><label>Nombre</label><input type="text" id="regNombre"></div>
-          <div class="campo-form" style="margin-bottom:12px"><label>Apellido</label><input type="text" id="regApellido"></div>
-          <div class="campo-form" style="margin-bottom:12px"><label>Correo</label><input type="email" id="regCorreo"></div>
-          <div class="campo-form" style="margin-bottom:12px"><label>Teléfono</label><input type="text" id="regTelefono"></div>
-          <div class="campo-form" style="margin-bottom:12px"><label>Documento</label><input type="text" id="regDocumento"></div>
+          <div class="campo-form" style="margin-bottom:12px"><label>Nombre</label><input type="text" id="regNombre" onkeydown="Util.handleEnter(event,'regApellido')"></div>
+          <div class="campo-form" style="margin-bottom:12px"><label>Apellido</label><input type="text" id="regApellido" onkeydown="Util.handleEnter(event,'regCorreo')"></div>
+          <div class="campo-form" style="margin-bottom:12px"><label>Correo</label><input type="email" id="regCorreo" onkeydown="Util.handleEnter(event,'regTelefono')"></div>
+          <div class="campo-form" style="margin-bottom:12px"><label>Teléfono</label><input type="text" id="regTelefono" onkeydown="Util.handleEnter(event,'regDocumento')"></div>
+          <div class="campo-form" style="margin-bottom:12px"><label>Documento</label><input type="text" id="regDocumento" onkeydown="Util.handleEnter(event,'regPassword')"></div>
           <div class="campo-form" style="margin-bottom:12px">
             <label>Contraseña</label>
             <div style="position:relative">
-              <input type="password" id="regPassword" style="width:100%;padding-right:40px;box-sizing:border-box">
+              <input type="password" id="regPassword" style="width:100%;padding-right:40px;box-sizing:border-box" onkeydown="Util.handleEnter(event,'regPasswordConfirm')">
               <button type="button" onclick="Util.togglePasswordVisibility('regPassword', this)" aria-label="Mostrar contraseña" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:1rem;padding:4px">👁️</button>
             </div>
           </div>
           <div class="campo-form" style="margin-bottom:16px">
             <label>Confirmar contraseña</label>
             <div style="position:relative">
-              <input type="password" id="regPasswordConfirm" style="width:100%;padding-right:40px;box-sizing:border-box">
+              <input type="password" id="regPasswordConfirm" style="width:100%;padding-right:40px;box-sizing:border-box" onkeydown="Util.handleEnter(event,null,Auth.registrar.bind(Auth))">
               <button type="button" onclick="Util.togglePasswordVisibility('regPasswordConfirm', this)" aria-label="Mostrar contraseña" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:1rem;padding:4px">👁️</button>
             </div>
           </div>
@@ -3280,6 +3313,65 @@ const Auth = {
     document.getElementById('btnAuthNav').textContent = 'Iniciar sesión';
     document.getElementById('btnAuthNav').onclick = ()=>Navegacion.ir('login');
     Navegacion.ir('inicio');
+  },
+
+  abrirRecuperar(){
+    // Mostrar modal de recuperación de contraseña
+    let overlay = document.getElementById('modalRecuperar');
+    if(!overlay){
+      overlay = document.createElement('div');
+      overlay.id = 'modalRecuperar';
+      overlay.className = 'modal-recuperar-overlay';
+      overlay.innerHTML = `
+        <div class="modal-recuperar-box">
+          <button class="modal-recuperar-cerrar" onclick="Auth.cerrarRecuperar()" aria-label="Cerrar">✕</button>
+          <h3 style="color:var(--azul-oscuro);margin-bottom:8px">🔑 Recuperar contraseña</h3>
+          <p style="font-size:.85rem;color:#889;margin-bottom:16px">Ingresa tu correo registrado y te enviaremos instrucciones para restablecer tu contraseña.</p>
+          <div id="alertaRecuperar"></div>
+          <div class="campo-form" style="margin-bottom:14px">
+            <label>Correo electrónico</label>
+            <input type="email" id="recuperarCorreo" placeholder="tu@correo.com" onkeydown="if(event.key==='Enter') Auth.recuperar()">
+          </div>
+          <button class="btn btn-primario btn-block" onclick="Auth.recuperar()">Enviar instrucciones</button>
+        </div>`;
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', function(e){ if(e.target === overlay) Auth.cerrarRecuperar(); });
+    }
+    overlay.style.display = 'flex';
+    setTimeout(()=>{ const el = document.getElementById('recuperarCorreo'); if(el) el.focus(); }, 80);
+  },
+
+  cerrarRecuperar(){
+    const overlay = document.getElementById('modalRecuperar');
+    if(overlay) overlay.style.display = 'none';
+    const alerta = document.getElementById('alertaRecuperar');
+    if(alerta) alerta.innerHTML = '';
+  },
+
+  async recuperar(){
+    const correo = (document.getElementById('recuperarCorreo')?.value || '').trim();
+    const alerta = document.getElementById('alertaRecuperar');
+    if(!correo || !Validar.correoValido(correo)){
+      if(alerta) alerta.innerHTML = `<div class="alerta alerta-error">⚠ Ingresa un correo válido.</div>`;
+      return;
+    }
+    if(alerta) alerta.innerHTML = `<div class="alerta alerta-info">⏳ Procesando...</div>`;
+    try{
+      const res = await fetch('api.php?action=recuperar_password', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({correo})
+      });
+      const data = await res.json();
+      if(data.ok){
+        if(alerta) alerta.innerHTML = `<div class="alerta alerta-exito">✅ Si el correo existe en nuestros registros, recibirás las instrucciones en breve.</div>`;
+        Util.mostrarToast('Instrucciones enviadas (si el correo existe)', 'exito');
+      } else {
+        if(alerta) alerta.innerHTML = `<div class="alerta alerta-exito">✅ Si el correo existe en nuestros registros, recibirás las instrucciones en breve.</div>`;
+      }
+    } catch(e){
+      if(alerta) alerta.innerHTML = `<div class="alerta alerta-exito">✅ Si el correo existe en nuestros registros, recibirás las instrucciones en breve.</div>`;
+    }
   }
 };
 

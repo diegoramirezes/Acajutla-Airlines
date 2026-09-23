@@ -97,6 +97,7 @@ if($usuario['status'] !== 'active'){
 // cliente mínimo con el correo, sin inventar nombre/apellido.
 $clienteData = ['id' => null, 'nombre' => '', 'apellido' => '', 'correo' => $correo, 'telefono' => '', 'documento' => ''];
 
+$cust = null;
 if($usuario['customer_id'] !== null){
     $stmtC = mysqli_prepare($conexion, "SELECT id, first_names, last_names, email, phone, document_number FROM customers WHERE id = ?");
     if($stmtC){
@@ -107,17 +108,54 @@ if($usuario['customer_id'] !== null){
         $cust = $resC ? mysqli_fetch_assoc($resC) : null;
         if($resC) mysqli_free_result($resC);
         mysqli_stmt_close($stmtC);
-        if($cust){
-            $clienteData = [
-                'id' => (int)$cust['id'],
-                'nombre' => $cust['first_names'],
-                'apellido' => $cust['last_names'],
-                'correo' => $cust['email'],
-                'telefono' => $cust['phone'],
-                'documento' => $cust['document_number']
-            ];
+    }
+}
+
+// Fallback: Si users.customer_id era NULL o no se encontró, buscar en customers por email
+if(!$cust){
+    $stmtCEmail = mysqli_prepare($conexion, "SELECT id, first_names, last_names, email, phone, document_number FROM customers WHERE email = ? LIMIT 1");
+    if($stmtCEmail){
+        mysqli_stmt_bind_param($stmtCEmail, 's', $correo);
+        mysqli_stmt_execute($stmtCEmail);
+        $resCEmail = mysqli_stmt_get_result($stmtCEmail);
+        $cust = $resCEmail ? mysqli_fetch_assoc($resCEmail) : null;
+        if($resCEmail) mysqli_free_result($resCEmail);
+        mysqli_stmt_close($stmtCEmail);
+
+        // Si se encontró, vincularlo en users para futuras sesiones
+        if($cust && isset($cust['id'])){
+            $stmtLink = mysqli_prepare($conexion, "UPDATE users SET customer_id = ? WHERE id = ?");
+            if($stmtLink){
+                $cid = (int)$cust['id'];
+                $uid = (int)$usuario['id'];
+                mysqli_stmt_bind_param($stmtLink, 'ii', $cid, $uid);
+                mysqli_stmt_execute($stmtLink);
+                mysqli_stmt_close($stmtLink);
+            }
         }
     }
+}
+
+if($cust){
+    $clienteData = [
+        'id' => (int)$cust['id'],
+        'nombre' => $cust['first_names'] ?: '',
+        'apellido' => $cust['last_names'] ?: '',
+        'correo' => $cust['email'] ?: $correo,
+        'telefono' => $cust['phone'] ?: '',
+        'documento' => $cust['document_number'] ?: ''
+    ];
+} else {
+    // Si no tiene registro en customers, usar el nombre de usuario o parte del correo
+    $nombreFallback = explode('@', $correo)[0];
+    $clienteData = [
+        'id' => null,
+        'nombre' => ucfirst($nombreFallback),
+        'apellido' => '',
+        'correo' => $correo,
+        'telefono' => '',
+        'documento' => ''
+    ];
 }
 
 // Actualizar last_login. No crítico: si falla, no impide el inicio de sesión.

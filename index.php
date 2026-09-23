@@ -2412,13 +2412,20 @@ const Vistas = {
       return `<div class="pantalla contenedor" style="padding-top:40px"><div class="estado-vacio"><div class="icono">🔒</div>Debes iniciar sesión para ver tu perfil.<br><br><button class="btn btn-primario" onclick="Navegacion.ir('login')">Iniciar sesión</button></div></div>`;
     }
     const u = Estado.usuario;
+    const nombre = (u.nombre || '').trim();
+    const apellido = (u.apellido || '').trim();
+    const inicial1 = nombre ? nombre[0].toUpperCase() : (u.correo ? u.correo[0].toUpperCase() : 'U');
+    const inicial2 = apellido ? apellido[0].toUpperCase() : '';
+    const avatarTexto = inicial1 + inicial2;
+    const nombreCompleto = (nombre || apellido) ? `${nombre} ${apellido}`.trim() : (u.correo || 'Usuario');
+
     return `
     <div class="pantalla contenedor" style="padding-top:24px">
       <div class="perfil-header">
-        <div class="perfil-avatar">${u.nombre[0]}${u.apellido[0]}</div>
+        <div class="perfil-avatar">${avatarTexto}</div>
         <div>
-          <h2 style="color:var(--azul-oscuro)">${u.nombre} ${u.apellido}</h2>
-          <span style="color:#889;font-size:.85rem">${u.correo}</span>
+          <h2 style="color:var(--azul-oscuro)">${Util.escapeHtml(nombreCompleto)}</h2>
+          <span style="color:#889;font-size:.85rem">${Util.escapeHtml(u.correo || '')}</span>
         </div>
         <button class="btn btn-outline" style="margin-left:auto" onclick="Auth.logout()">Cerrar sesión</button>
       </div>

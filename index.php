@@ -1547,7 +1547,7 @@ const Api = {
 
     try{
       const controller = new AbortController();
-      const timeoutId = setTimeout(()=>controller.abort(), API_CONFIG.TIMEOUT_MS);
+      const timeoutId = setTimeout(()=>controller.abort(), 30000);
       const resp = await fetch(API_CONFIG.ENDPOINT_COMPROBANTE_EMAIL_REAL, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},

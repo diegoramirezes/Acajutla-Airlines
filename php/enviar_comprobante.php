@@ -5,63 +5,9 @@
  *
  * Endpoint: POST php/enviar_comprobante.php
  * Content-Type esperado: application/json
- *
- * Conecta el envío REAL del comprobante de reserva por correo,
- * consumido por Api.sendBookingEmail() en index.php.
- *
- * Payload REAL que ya arma Api.sendBookingEmail() (NO se inventó nada
- * nuevo; se tomó tal cual del código actual de index.php):
- *   {
- *     pnr: string,
- *     email: string,
- *     nombreCliente: string,
- *     total: number,
- *     estado: string,
- *     segmentos: [
- *       { numero_vuelo, origen (código IATA string), destino (código IATA string),
- *         fecha, asiento, estado_check_in, pase_abordar_emitido }
- *     ],
- *     pasajeros: [ { nombres, apellidos, documento } ],
- *     pago: { metodo, estado }
- *   }
- *
- * Tabla real utilizada (única tabla que este endpoint escribe):
- *   email_outbox: id, template, to_email, subject, html, ref_type, ref_id,
- *                 status ENUM('pending','sent','simulado','failed'),
- *                 error_msg, brevo_message_id, created_at, sent_at
- *
- * IMPORTANTE (alcance de esta etapa, ver REGLAS_PROYECTO.md):
- *   - NO se inserta en reservations/customers/passengers/flight_segments/
- *     payments/dte_headers/dte_items. Únicamente email_outbox.
- *   - NO se usa PHPMailer ni Composer.
- *   - El envío real se hace vía Nylas Email API v3 (POST
- *     https://api.us.nylas.com/v3/grants/{grant_id}/messages/send), usando
- *     una cuenta Gmail ya conectada a Nylas mediante OAuth (Grant ID ya
- *     generado y probado). Ya no se usa SMTP2GO, Resend, Brevo ni SMTP
- *     directo. Se usa cURL si está disponible en el entorno; si no, se
- *     hace fallback a file_get_contents() con contexto HTTPS (stream
- *     wrapper nativo de PHP, sin dependencias).
- *   - Credenciales SOLO por variables de entorno: NYLAS_API_KEY,
- *     NYLAS_GRANT_ID. Nunca escritas aquí.
- *   - NOTA: la columna email_outbox.brevo_message_id se sigue usando tal
- *     cual (sin migración de esquema, según regla del proyecto de no
- *     tocar la BD) para guardar el id del mensaje que devuelve Nylas
- *     (data.id). El nombre de la columna es historia previa (cuando se
- *     usaba Brevo); su contenido ahora es el identificador real de Nylas.
- *
- * Respuesta: siempre JSON.
- *   Éxito: {"success":true,"message":"Comprobante enviado correctamente."}
- *   Error: {"success":false,"message":"..."} (mensaje genérico, sin
- *          detalles técnicos; el detalle real queda en email_outbox.error_msg)
  * =====================================================================
  */
 
-// Blindaje contra cualquier salida accidental (warnings/notices de PHP)
-// contaminando el JSON — mismo patrón ya usado en asientos_ocupados.php.
-// date.timezone puede no estar configurado en el php.ini del contenedor;
-// sin fijarlo explícitamente, date() emite un warning que se imprime antes
-// del JSON y rompe la respuesta (causa real de este incidente: se agregó
-// una llamada nueva a date() en la generación del PDF).
 date_default_timezone_set('America/El_Salvador');
 ini_set('display_errors', '0');
 error_reporting(E_ALL);
@@ -69,9 +15,6 @@ ob_start();
 
 header('Content-Type: application/json; charset=utf-8');
 
-// -----------------------------------------------------------------------
-// 0. Config Nylas — SOLO desde variables de entorno. Nunca hardcodeadas.
-// -----------------------------------------------------------------------
 const NYLAS_API_BASE = 'https://api.us.nylas.com/v3';
 
 function responderJson($codigoHttp, $body){
@@ -81,21 +24,15 @@ function responderJson($codigoHttp, $body){
     exit;
 }
 
-// -----------------------------------------------------------------------
-// 1. Método HTTP
-// -----------------------------------------------------------------------
 if($_SERVER['REQUEST_METHOD'] !== 'POST'){
     responderJson(400, ['success' => false, 'message' => 'Método no permitido.']);
 }
 
-// -----------------------------------------------------------------------
-// 2. Leer y decodificar JSON (con límite de tamaño razonable)
-// -----------------------------------------------------------------------
 $rawBody = file_get_contents('php://input');
 if($rawBody === false || strlen($rawBody) === 0){
     responderJson(400, ['success' => false, 'message' => 'Cuerpo de la petición vacío.']);
 }
-if(strlen($rawBody) > 200000){ // 200KB es más que suficiente para este payload
+if(strlen($rawBody) > 200000){
     responderJson(400, ['success' => false, 'message' => 'Payload demasiado grande.']);
 }
 
@@ -104,13 +41,9 @@ if(json_last_error() !== JSON_ERROR_NONE || !is_array($payload)){
     responderJson(400, ['success' => false, 'message' => 'JSON inválido.']);
 }
 
-// -----------------------------------------------------------------------
-// 3. Validaciones mínimas (no confiar en el frontend)
-// -----------------------------------------------------------------------
 function textoSeguro($v, $maxLen = 200){
     if(!is_string($v)) return null;
     $v = trim($v);
-    // Elimina saltos de línea / retorno de carro (evita header injection más adelante)
     $v = str_replace(["\r", "\n"], ' ', $v);
     if($v === '' || strlen($v) > $maxLen) return null;
     return $v;
@@ -156,14 +89,10 @@ if(count($payload['pasajeros']) > 20){
 if(!isset($payload['pago']) || !is_array($payload['pago'])){
     responderJson(400, ['success' => false, 'message' => 'Datos de pago inválidos.']);
 }
-// Solo se usan campos seguros del pago (nunca número de tarjeta ni CVV,
-// que además Api.sendBookingEmail() en el frontend ya ni siquiera envía).
+
 $pagoMetodo = textoSeguro($payload['pago']['metodo'] ?? null, 40) ?: 'N/D';
 $pagoEstado = textoSeguro($payload['pago']['estado'] ?? null, 40) ?: 'N/D';
 
-// -----------------------------------------------------------------------
-// 4. Construir el HTML del comprobante (todo escapado con htmlspecialchars)
-// -----------------------------------------------------------------------
 function h($v){
     return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
 }
@@ -196,14 +125,7 @@ foreach($payload['pasajeros'] as $p){
         </tr>';
 }
 
-// -----------------------------------------------------------------------
-// Conversión determinista de un monto en dólares a su representación en
-// letras (español). Sin APIs externas, sin Math.random, sin mock. Usa
-// EXACTAMENTE el mismo $total ya validado más arriba — no se recalcula ni
-// se toma de otra fuente.
-// -----------------------------------------------------------------------
 function _numALetrasGrupo($num){
-    // Convierte un número de 0 a 999 a letras (sin escalas como mil/millón).
     $num = (int)$num;
     if($num === 0) return '';
     if($num === 100) return 'cien';
@@ -234,11 +156,8 @@ function _numALetrasGrupo($num){
     return implode(' ', $partes);
 }
 
-/**
- * Convierte un entero no negativo (hasta 999,999,999) a letras en español.
- */
 function numeroALetrasEntero($n){
-    $n = (int)abs($n); // el total de una reserva nunca es negativo; defensivo, sin inventar signo
+    $n = (int)abs($n);
     if($n === 0) return 'cero';
 
     $millones = intdiv($n, 1000000);
@@ -259,8 +178,6 @@ function numeroALetrasEntero($n){
 
     $resultado = trim(implode(' ', $partes));
 
-    // Apócope: "uno"/"veintiuno" -> "un"/"veintiún" al anteceder un
-    // sustantivo masculino (dólar/centavo), único uso de este texto.
     if(substr($resultado, -9) === 'veintiuno'){
         $resultado = substr($resultado, 0, -9) . 'veintiún';
     } elseif(substr($resultado, -3) === 'uno'){
@@ -270,11 +187,6 @@ function numeroALetrasEntero($n){
     return $resultado;
 }
 
-/**
- * Convierte un monto monetario (dólares) a su representación en letras.
- * Usa el mismo redondeo a 2 decimales que $totalFormateado (number_format),
- * para que el texto corresponda exactamente al número ya mostrado.
- */
 function montoEnLetras($total){
     $centavosTotales = (int)round(((float)$total) * 100);
     $enteros = intdiv($centavosTotales, 100);
@@ -292,24 +204,15 @@ function montoEnLetras($total){
 $totalFormateado = number_format($total, 2, '.', ',');
 $totalEnLetras = montoEnLetras($total);
 
-// =========================================================================
-// GENERADOR DE PDF — sin librerías externas (no existe ninguna en el
-// proyecto: sin Composer, Dockerfile solo instala mysqli). Se escribe el
-// documento PDF byte a byte, usando únicamente fuentes estándar de PDF
-// (Helvetica / Helvetica-Bold), que no requieren embeber ningún archivo de
-// fuente — cualquier lector de PDF las soporta de forma nativa. Esto evita
-// agregar cualquier dependencia nueva y funciona igual en Render que en
-// XAMPP, sin tocar el Dockerfile.
-// =========================================================================
-
-/**
- * Convierte UTF-8 a Latin-1/CP1252 de forma segura y sin depender de
- * mbstring ni iconv (ninguno de los dos está garantizado en este entorno,
- * ver aprendizajes previos del proyecto). Cubre exactamente el rango que
- * necesitan los acentos/ñ del español (U+0080–U+00FF). Los caracteres
- * fuera de ese rango se sustituyen por '?', nunca se inventan datos.
- */
 function utf8ALatin1Seguro($texto){
+    $texto = (string)$texto;
+    if(function_exists('mb_convert_encoding')){
+        return mb_convert_encoding($texto, 'Windows-1252', 'UTF-8');
+    }
+    if(function_exists('iconv')){
+        $res = @iconv('UTF-8', 'Windows-1252//TRANSLIT//IGNORE', $texto);
+        if($res !== false) return $res;
+    }
     $resultado = '';
     $len = strlen($texto);
     for($i = 0; $i < $len; $i++){
@@ -328,36 +231,22 @@ function utf8ALatin1Seguro($texto){
     return $resultado;
 }
 
-/** Escapa un texto para insertarlo de forma segura dentro de "(...)" en un content stream PDF. */
 function pdfEscaparTexto($texto){
-    $texto = utf8ALatin1Seguro((string)$texto);
+    $texto = (string)$texto;
+    $texto = str_replace(["\r", "\n"], ' ', $texto);
+    $texto = utf8ALatin1Seguro($texto);
     return str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], $texto);
 }
 
-/**
- * Genera el PDF completo del comprobante como una cadena de bytes binaria
- * lista para adjuntar. Construye una lista de "líneas" (texto/fuente/
- * tamaño/color/separador) y las va colocando en páginas A4, abriendo una
- * página nueva automáticamente cuando el contenido no cabe — sin límite
- * artificial de segmentos/pasajeros distinto al que ya valida este mismo
- * archivo más arriba (máx. 10 segmentos, máx. 20 pasajeros).
- *
- * @param array $datos ['pnr','nombreCliente','email','estado','segmentos'
- *                       (payload real, con asientos por pasajero si vienen),
- *                       'pasajeros' (payload real), 'pagoMetodo','pagoEstado',
- *                       'totalFormateado','totalEnLetras']
- * @return string bytes del PDF
- */
 function construirPdfComprobante($datos){
-    $anchoPagina = 595.28; $altoPagina = 841.89; // A4 en puntos
+    $anchoPagina = 595.28; $altoPagina = 841.89; // A4
     $margenIzq = 42; $margenDer = 42;
     $altoBanda = 64;
     $margenInferior = 56;
-    $colorCorporativo = [0.043, 0.239, 0.388]; // mismo azul del correo HTML (#0b3d63)
+    $colorCorporativo = [0.043, 0.239, 0.388];
     $colorGris = [0.34, 0.38, 0.44];
     $colorNegro = [0.1, 0.12, 0.16];
 
-    // ---- 1) Construir la lista plana de líneas a dibujar ----
     $lineas = [];
     $agregar = function($texto, $fuente = 'F1', $tam = 10, $color = null, $espacioAntes = 4, $indent = 0) use (&$lineas, $colorNegro){
         $lineas[] = ['tipo' => 'texto', 'texto' => (string)$texto, 'fuente' => $fuente, 'tam' => $tam,
@@ -370,50 +259,51 @@ function construirPdfComprobante($datos){
     $fechaEmision = date('d/m/Y H:i');
 
     $agregar('COMPROBANTE DE RESERVA Y BILLETE ELECTRÓNICO', 'F2', 14, $colorCorporativo, 0);
-    $agregar('Código de reserva (PNR): ' . $datos['pnr'], 'F2', 12, $colorNegro, 6);
+    $agregar('Código de reserva (PNR): ' . ($datos['pnr'] ?? '-'), 'F2', 12, $colorNegro, 6);
     $agregar('Fecha de emisión: ' . $fechaEmision, 'F1', 9, $colorGris, 2);
     $separador(10);
 
     $agregar('DATOS DEL CLIENTE', 'F2', 11, $colorCorporativo, 0);
-    $agregar('Cliente: ' . $datos['nombreCliente'], 'F1', 10, $colorNegro, 6);
-    $agregar('Correo de contacto: ' . $datos['email'], 'F1', 10, $colorNegro, 3);
-    $agregar('Estado de la reserva: ' . $datos['estado'], 'F1', 10, $colorNegro, 3);
+    $agregar('Cliente: ' . ($datos['nombreCliente'] ?? '-'), 'F1', 10, $colorNegro, 6);
+    $agregar('Correo de contacto: ' . ($datos['email'] ?? '-'), 'F1', 10, $colorNegro, 3);
+    $agregar('Estado de la reserva: ' . ($datos['estado'] ?? '-'), 'F1', 10, $colorNegro, 3);
     $separador(10);
 
     $agregar('ITINERARIO', 'F2', 11, $colorCorporativo, 0);
-    foreach($datos['segmentos'] as $seg){
+    $segmentos = is_array($datos['segmentos'] ?? null) ? $datos['segmentos'] : [];
+    foreach($segmentos as $seg){
         if(!is_array($seg)) continue;
-        $numeroVuelo = $seg['numero_vuelo'] ?? '-';
-        $origen = $seg['origen'] ?? '-';
-        $destino = $seg['destino'] ?? '-';
-        $fecha = $seg['fecha'] ?? '-';
+        $numeroVuelo = (string)($seg['numero_vuelo'] ?? '-');
+        $origen      = (string)($seg['origen'] ?? '-');
+        $destino     = (string)($seg['destino'] ?? '-');
+        $fecha       = (string)($seg['fecha'] ?? '-');
         $agregar('Vuelo ' . $numeroVuelo . '  ·  ' . $origen . ' -> ' . $destino, 'F2', 10.5, $colorNegro, 8);
         $agregar('Fecha: ' . $fecha, 'F1', 9.5, $colorGris, 2, 8);
-        if(isset($seg['fare_class']) && $seg['fare_class'] !== ''){
-            $agregar('Clase/tarifa: ' . $seg['fare_class'], 'F1', 9.5, $colorGris, 1, 8);
+        if(!empty($seg['fare_class'])){
+            $agregar('Clase/tarifa: ' . (string)$seg['fare_class'], 'F1', 9.5, $colorGris, 1, 8);
         }
-        // Un asiento por pasajero si el payload trae el arreglo por
-        // pasajero (asientos[]); si no, se usa el campo simple existente.
-        if(isset($seg['asientos']) && is_array($seg['asientos']) && isset($datos['pasajeros']) && is_array($datos['pasajeros'])){
+        if(!empty($seg['asientos']) && is_array($seg['asientos']) && !empty($datos['pasajeros']) && is_array($datos['pasajeros'])){
             foreach($seg['asientos'] as $idx => $asientoPax){
                 $pax = $datos['pasajeros'][$idx] ?? null;
-                $nombrePax = $pax ? trim(($pax['nombres'] ?? '') . ' ' . ($pax['apellidos'] ?? '')) : ('Pasajero ' . ($idx + 1));
-                $agregar('- ' . $nombrePax . '  ·  Asiento: ' . ($asientoPax ?: 'No requiere asiento'), 'F1', 9.5, $colorNegro, 1, 14);
+                $nombrePax = is_array($pax) ? trim(($pax['nombres'] ?? '') . ' ' . ($pax['apellidos'] ?? '')) : ('Pasajero ' . ($idx + 1));
+                $strAsiento = is_scalar($asientoPax) ? (string)$asientoPax : 'Asignado';
+                $agregar('- ' . $nombrePax . '  ·  Asiento: ' . ($strAsiento ?: 'No requiere asiento'), 'F1', 9.5, $colorNegro, 1, 14);
             }
         } elseif(!empty($seg['asiento'])){
-            $agregar('Asiento: ' . $seg['asiento'], 'F1', 9.5, $colorNegro, 1, 14);
+            $agregar('Asiento: ' . (string)$seg['asiento'], 'F1', 9.5, $colorNegro, 1, 14);
         }
     }
     $separador(10);
 
     $agregar('PASAJEROS', 'F2', 11, $colorCorporativo, 0);
-    foreach($datos['pasajeros'] as $p){
+    $pasajeros = is_array($datos['pasajeros'] ?? null) ? $datos['pasajeros'] : [];
+    foreach($pasajeros as $p){
         if(!is_array($p)) continue;
         $nombreCompleto = trim(($p['nombres'] ?? '') . ' ' . ($p['apellidos'] ?? ''));
-        $linea = $nombreCompleto;
-        if(!empty($p['tipo'])) $linea .= '  ·  Tipo: ' . $p['tipo'];
-        if(!empty($p['documento'])) $linea .= '  ·  Documento: ' . $p['documento'];
-        if(!empty($p['nacionalidad'])) $linea .= '  ·  Nacionalidad: ' . $p['nacionalidad'];
+        $linea = $nombreCompleto !== '' ? $nombreCompleto : 'Pasajero';
+        if(!empty($p['tipo'])) $linea .= '  ·  Tipo: ' . (string)$p['tipo'];
+        if(!empty($p['documento'])) $linea .= '  ·  Documento: ' . (string)$p['documento'];
+        if(!empty($p['nacionalidad'])) $linea .= '  ·  Nacionalidad: ' . (string)$p['nacionalidad'];
         $agregar($linea, 'F1', 9.5, $colorNegro, 5);
     }
     $separador(10);
@@ -426,11 +316,12 @@ function construirPdfComprobante($datos){
     $separador(10);
 
     $agregar('TOTAL', 'F2', 11, $colorCorporativo, 0);
-    $agregar('Total: $' . $datos['totalFormateado'] . ' USD', 'F2', 12, $colorNegro, 6);
-    $agregar('Total en letras: ' . $datos['totalEnLetras'], 'F1', 9.5, $colorGris, 3);
+    $agregar('Total: $' . ($datos['totalFormateado'] ?? '0.00') . ' USD', 'F2', 12, $colorNegro, 6);
+    if(!empty($datos['totalEnLetras'])){
+        $agregar('Total en letras: ' . $datos['totalEnLetras'], 'F1', 9.5, $colorGris, 3);
+    }
 
-    // ---- 2) Paginar: colocar cada línea en páginas A4 ----
-    $paginas = []; // cada elemento: array de líneas ya con su 'y' calculado
+    $paginas = [];
     $paginaActual = [];
     $y = $altoPagina - $altoBanda - 34;
     foreach($lineas as $l){
@@ -447,11 +338,9 @@ function construirPdfComprobante($datos){
     if(!empty($paginaActual)) $paginas[] = $paginaActual;
     if(empty($paginas)) $paginas[] = [];
 
-    // ---- 3) Construir el content stream de cada página ----
     $streamsPaginas = [];
     foreach($paginas as $indicePagina => $lineasPagina){
         $stream = '';
-        // Banda de encabezado corporativa (se repite en cada página).
         $stream .= sprintf("%.3F %.3F %.3F rg\n0 %.2F %.2F %.2F re f\n",
             $colorCorporativo[0], $colorCorporativo[1], $colorCorporativo[2],
             $altoPagina - $altoBanda, $anchoPagina, $altoBanda);
@@ -472,10 +361,7 @@ function construirPdfComprobante($datos){
         $streamsPaginas[] = $stream;
     }
 
-    // ---- 4) Ensamblar el archivo PDF (objetos, xref, trailer) ----
     $numPaginas = count($streamsPaginas);
-    // Numeración de objetos: 1=Catalog, 2=Pages, 3=F1, 4=F2,
-    // luego por cada página: (Page, Contents) en pares consecutivos.
     $objetos = [];
     $idPagesKids = [];
     $primerObjetoPagina = 5;
@@ -484,7 +370,7 @@ function construirPdfComprobante($datos){
         $idContenido = $idPagina + 1;
         $idPagesKids[] = $idPagina;
     }
-    $kidsRefs = implode(' ', array_map(fn($id) => $id . ' 0 R', $idPagesKids));
+    $kidsRefs = implode(' ', array_map(function($id){ return $id . ' 0 R'; }, $idPagesKids));
 
     $objetos[1] = "<< /Type /Catalog /Pages 2 0 R >>";
     $objetos[2] = "<< /Type /Pages /Kids [$kidsRefs] /Count $numPaginas >>";
@@ -497,12 +383,11 @@ function construirPdfComprobante($datos){
         $objetos[$idPagina] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " . $anchoPagina . " " . $altoPagina . "] "
             . "/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents " . $idContenido . " 0 R >>";
         $stream = $streamsPaginas[$i];
-        $objetos[$idContenido] = "STREAM::" . $stream; // marcador especial, se serializa distinto (stream binario)
+        $objetos[$idContenido] = "STREAM::" . $stream;
     }
 
-    // ---- 5) Serializar a bytes con offsets reales para el xref ----
     $pdf = "%PDF-1.4\n";
-    $offsets = [0 => 0]; // el objeto 0 siempre es libre, offset 0
+    $offsets = [0 => 0];
     ksort($objetos);
     foreach($objetos as $id => $cuerpo){
         $offsets[$id] = strlen($pdf);
@@ -584,11 +469,7 @@ $htmlCorreo = '<!DOCTYPE html>
 
 $asunto = 'Acajutla Airlines - Comprobante de reserva ' . $pnr;
 
-// -----------------------------------------------------------------------
-// 5. Registrar en email_outbox como 'pending' ANTES de intentar enviar
-// -----------------------------------------------------------------------
 require_once __DIR__ . '/conexion.php';
-require_once __DIR__ . '/pdf_comprobante.php';
 
 if(!CONEXION_OK){
     responderJson(500, ['success' => false, 'message' => 'No pudimos enviar el comprobante. Intenta nuevamente.']);
@@ -612,13 +493,8 @@ if(!mysqli_stmt_execute($stmtInsert)){
 $emailOutboxId = mysqli_insert_id($conexion);
 mysqli_stmt_close($stmtInsert);
 
-// -----------------------------------------------------------------------
-// 6. Intentar el envío real vía Nylas Email API v3 (HTTPS), NO SMTP2GO
-// -----------------------------------------------------------------------
 function actualizarEstadoEnvio($conexion, $id, $status, $errorMsg = null, $nylasMessageId = null){
     if($status === 'sent'){
-        // NOTA: la columna se sigue llamando brevo_message_id (no se migra
-        // el esquema), pero ahora guarda el id del mensaje real de Nylas.
         $sql = "UPDATE email_outbox SET status='sent', sent_at=NOW(), error_msg=NULL, brevo_message_id=? WHERE id=?";
         $stmt = mysqli_prepare($conexion, $sql);
         if($stmt){
@@ -638,18 +514,6 @@ function actualizarEstadoEnvio($conexion, $id, $status, $errorMsg = null, $nylas
     }
 }
 
-/**
- * Hace un POST HTTPS con cuerpo JSON. Usa cURL si la extensión está
- * cargada en el entorno (function_exists('curl_init')); si no, hace
- * fallback a file_get_contents() con un stream context HTTPS, que es
- * parte del núcleo de PHP y no requiere ninguna extensión adicional
- * ni tocar el Dockerfile.
- * $timeoutSegundos es configurable porque Nylas recomienda un timeout
- * de cliente de al menos 150s para POST /messages/send.
- * Devuelve ['codigo' => int, 'cuerpo' => string|false].
- * Lanza Exception solo si NINGÚN mecanismo de transporte está disponible
- * o si la conexión de red falla por completo (timeout, DNS, etc.).
- */
 function postJsonHttps($url, array $headers, $cuerpoJson, $timeoutSegundos = 15){
     if(function_exists('curl_init')){
         $ch = curl_init($url);
@@ -674,15 +538,13 @@ function postJsonHttps($url, array $headers, $cuerpoJson, $timeoutSegundos = 15)
         return ['codigo' => (int)$codigoHttp, 'cuerpo' => $cuerpoRespuesta];
     }
 
-    // Fallback sin cURL: file_get_contents con stream context HTTPS
-    // (wrapper nativo de PHP, no requiere extensiones adicionales).
     $opciones = [
         'http' => [
             'method'  => 'POST',
             'header'  => implode("\r\n", $headers),
             'content' => $cuerpoJson,
             'timeout' => $timeoutSegundos,
-            'ignore_errors' => true, // para poder leer el cuerpo también en 4xx/5xx
+            'ignore_errors' => true,
         ],
         'ssl' => [
             'verify_peer' => true,
@@ -707,37 +569,19 @@ function postJsonHttps($url, array $headers, $cuerpoJson, $timeoutSegundos = 15)
     return ['codigo' => $codigoHttp, 'cuerpo' => $cuerpoRespuesta];
 }
 
-/**
- * Envía un correo HTML vía Nylas Email API v3 (POST
- * https://api.us.nylas.com/v3/grants/{grant_id}/messages/send, HTTPS).
- * NO usa SMTP, fsockopen, STARTTLS, AUTH LOGIN, SMTP2GO, Resend ni Brevo.
- * Autenticación: header "Authorization: Bearer {NYLAS_API_KEY}".
- * El remitente es la cuenta Gmail ya conectada al Grant (no se envía un
- * campo "from": Nylas usa automáticamente la cuenta del grant).
- * Devuelve el id del mensaje (string) que entrega Nylas en data.id si el
- * envío fue realmente exitoso (HTTP 2xx Y un id presente en la respuesta).
- * Lanza Exception con detalle técnico en caso contrario (el caller decide
- * qué guardar en email_outbox.error_msg y qué mostrar al usuario).
- */
 function enviarCorreoNylas($apiKey, $grantId, $destinatario, $asunto, $htmlBody, $adjuntoPdfBase64 = null, $nombreArchivoPdf = null){
     $cuerpo = [
         'subject' => $asunto,
         'to'      => [['email' => $destinatario]],
         'body'    => $htmlBody,
-        // Explícito (aunque 'false' ya es el valor por defecto de la API de
-        // Nylas): el body se envía como HTML real, nunca como texto plano.
         'is_plaintext' => false,
     ];
 
-    // PDF adjunto real (no un enlace ni texto/base64 visible en el correo):
-    // formato oficial de Nylas v3 — content_type + filename + content
-    // (base64). Opcional: si no se pudo generar el PDF, el correo se envía
-    // igual, sin adjunto, para no romper el envío del resumen HTML.
     if($adjuntoPdfBase64 !== null && $nombreArchivoPdf !== null){
         $cuerpo['attachments'] = [[
             'content_type' => 'application/pdf',
-            'filename' => $nombreArchivoPdf,
-            'content' => $adjuntoPdfBase64,
+            'filename'     => $nombreArchivoPdf,
+            'content'      => $adjuntoPdfBase64,
         ]];
     }
 
@@ -750,7 +594,6 @@ function enviarCorreoNylas($apiKey, $grantId, $destinatario, $asunto, $htmlBody,
 
     $url = NYLAS_API_BASE . '/grants/' . rawurlencode($grantId) . '/messages/send';
 
-    // Nylas recomienda un timeout de cliente de al menos 150s para este endpoint.
     $respuesta = postJsonHttps($url, $headers, $cuerpoJson, 160);
     $codigoHttp = $respuesta['codigo'];
     $cuerpoRespuesta = $respuesta['cuerpo'];
@@ -758,8 +601,6 @@ function enviarCorreoNylas($apiKey, $grantId, $destinatario, $asunto, $htmlBody,
     $datos = json_decode((string)$cuerpoRespuesta, true);
 
     if($codigoHttp < 200 || $codigoHttp >= 300){
-        // Nunca se expone el cuerpo de la respuesta de Nylas (puede incluir
-        // detalles internos) al frontend; solo queda registrado internamente.
         throw new Exception('Nylas respondió HTTP ' . $codigoHttp . ': ' . substr((string)$cuerpoRespuesta, 0, 500));
     }
 
@@ -768,8 +609,6 @@ function enviarCorreoNylas($apiKey, $grantId, $destinatario, $asunto, $htmlBody,
         ? $datosEnvio['id']
         : null;
 
-    // Aunque el HTTP sea 2xx, solo se considera realmente exitoso si Nylas
-    // entrega un id de mensaje válido en la respuesta.
     if($mensajeId === null){
         throw new Exception('Nylas respondió HTTP ' . $codigoHttp . ' pero sin un id de mensaje válido: ' . substr((string)$cuerpoRespuesta, 0, 500));
     }
@@ -787,32 +626,28 @@ if(!$nylasApiKey || !$nylasGrantId){
 }
 
 try{
-    // Genera el PDF real reutilizando exactamente los mismos datos/valores
-    // ya validados y calculados arriba — no se duplica ninguna lógica de
-    // total, total en letras, ni datos de la reserva.
     $adjuntoPdfBase64 = null;
     $nombreArchivoPdf = null;
-    try{
+    try {
         $datosPdf = [
-            'pnr' => $pnr,
-            'email' => $email,
-            'nombreCliente' => $nombreCliente,
-            'estado' => $estadoReserva,
-            'total' => $total,
+            'pnr'             => $pnr,
+            'email'           => $email,
+            'nombreCliente'   => $nombreCliente,
+            'estado'          => $estadoReserva,
+            'total'           => $total,
             'totalFormateado' => $totalFormateado,
-            'totalEnLetras' => $totalEnLetras,
-            'segmentos' => $payload['segmentos'],
-            'pasajeros' => $payload['pasajeros'],
-            'pago' => ['metodo' => $pagoMetodo, 'estado' => $pagoEstado],
+            'totalEnLetras'   => $totalEnLetras,
+            'segmentos'       => $payload['segmentos'] ?? [],
+            'pasajeros'       => $payload['pasajeros'] ?? [],
+            'pago'            => ['metodo' => $pagoMetodo, 'estado' => $pagoEstado],
         ];
         $bytesPdf = construirPdfComprobante($datosPdf);
-        $adjuntoPdfBase64 = base64_encode($bytesPdf);
-        // Nombre profesional con el PNR real de la reserva.
-        $nombreArchivoPdf = 'Acajutla_Airlines_Reserva_' . preg_replace('/[^A-Za-z0-9]/', '', $pnr) . '.pdf';
-    } catch(Exception $ePdf){
-        // Si el PDF falla por cualquier motivo, el correo HTML se envía
-        // igual, sin adjunto — nunca se rompe el envío actual por esto.
-        error_log('[Acajutla Airlines] No se pudo generar el PDF del comprobante: ' . $ePdf->getMessage());
+        if(!empty($bytesPdf)){
+            $adjuntoPdfBase64 = base64_encode($bytesPdf);
+            $nombreArchivoPdf = 'Acajutla_Airlines_Reserva_' . preg_replace('/[^A-Za-z0-9]/', '', $pnr) . '.pdf';
+        }
+    } catch(Throwable $ePdf){
+        error_log('[Acajutla Airlines] Advertencia: No se pudo generar PDF adjunto (' . $ePdf->getMessage() . '), enviando solo HTML.');
         $adjuntoPdfBase64 = null;
         $nombreArchivoPdf = null;
     }
@@ -821,10 +656,9 @@ try{
     actualizarEstadoEnvio($conexion, $emailOutboxId, 'sent', null, $nylasMessageId);
     cerrarConexion();
     responderJson(200, ['success' => true, 'message' => 'Comprobante enviado correctamente.']);
-} catch(Exception $e){
-    // El detalle técnico se guarda internamente; al frontend nunca se expone.
-    error_log('[Acajutla Airlines] Error de envío vía Nylas Email API: ' . $e->getMessage());
-    actualizarEstadoEnvio($conexion, $emailOutboxId, 'failed', $e->getMessage());
+} catch(Throwable $e){
+    error_log('[Acajutla Airlines] Error de envío vía Nylas Email API: ' . $e->getMessage() . ' en ' . $e->getFile() . ':' . $e->getLine());
+    actualizarEstadoEnvio($conexion, $emailOutboxId, 'failed', $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
     cerrarConexion();
     responderJson(500, ['success' => false, 'message' => 'No pudimos enviar el comprobante. Intenta nuevamente.']);
 }

@@ -283,10 +283,55 @@ a{text-decoration:none;color:inherit;}
 .destacados{padding:70px 0;}
 .grid-destinos{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;}
 .card-destino{
-  border-radius:var(--radio);overflow:hidden;background:#fff;box-shadow:var(--sombra);transition:var(--transicion);cursor:pointer;
+  border-radius:var(--radio);overflow:hidden;background:#fff;box-shadow:var(--sombra);transition:var(--transicion);cursor:pointer;display:flex;flex-direction:column;
 }
 .card-destino:hover{transform:translateY(-6px);box-shadow:var(--sombra-hover);}
-.card-destino-img{height:150px;background:linear-gradient(135deg,var(--azul),var(--azul-oscuro));display:flex;align-items:center;justify-content:center;font-size:2.4rem;color:#fff;}
+.card-destino-img{
+  height:160px;
+  position:relative;
+  background:linear-gradient(135deg,var(--azul),var(--azul-oscuro));
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:2.4rem;
+  color:#fff;
+  overflow:hidden;
+}
+.card-destino-img img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+  transition:transform .4s ease;
+}
+.card-destino:hover .card-destino-img img{
+  transform:scale(1.08);
+}
+.card-destino-badge{
+  position:absolute;
+  top:10px;
+  right:10px;
+  background:rgba(11, 61, 99, 0.82);
+  backdrop-filter:blur(4px);
+  color:#fff;
+  padding:3px 9px;
+  border-radius:14px;
+  font-size:.72rem;
+  font-weight:700;
+  letter-spacing:.5px;
+  box-shadow:0 2px 6px rgba(0,0,0,.2);
+}
+.card-destino-img.sin-foto img{
+  display:none;
+}
+.card-destino-img.sin-foto .card-destino-icono-fallback{
+  display:flex;
+}
+.card-destino-icono-fallback{
+  display:none;
+  font-size:2.4rem;
+  color:#fff;
+}
 .card-destino-info{padding:16px;}
 .card-destino-info h4{font-size:1.02rem;margin-bottom:2px;}
 .card-destino-info span{color:#888;font-size:.82rem;}
@@ -871,6 +916,35 @@ function totalPasajerosConAsiento(){
    4. UTILIDADES / VALIDACIONES / HELPERS
 ===================================================================== */
 const Util = {
+  // Catálogo de fotografías optimizadas de cada destino (mapeado por código IATA).
+  // Si deseas usar fotos locales en el futuro, puedes colocar rutas como 'img/destinos/TGU.jpg'.
+  FOTOS_DESTINOS: {
+    'MEX': 'img/Ciudad_de_Mexico.jpg',
+    'GUA': 'img/Guatemala_City.jpg',
+    'LUA': 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=600&q=80',
+    'LIR': 'img/Liberia.jpg',
+    'MGA': 'img/Managua.jpg',
+    'MIA': 'img/Miami.jpg',
+    'PTY': 'img/Ciudad_de_Panama.jpg',
+    'SFO': 'img/San_Francisco.jpg',
+    'SJO': 'img/San_Jose_CR.jpg',
+    'TGU': 'img/Tegucigalpa.jpg',
+    'JFK': 'img/Nueva_York.jpg',
+    'MAD': 'img/Madrid.jpg',
+    'BOG': 'img/Bogota.jpg',
+    'LAX': 'img/Los_Angeles.jpg',
+    'CUN': 'img/Cancun.jpg'
+  },
+
+  fotoDestino(codigoIata){
+    if(!codigoIata) return null;
+    const ruta = this.FOTOS_DESTINOS[String(codigoIata).trim().toUpperCase()];
+    if(!ruta) return null;
+    if(ruta.startsWith('http://') || ruta.startsWith('https://')) return ruta;
+    const base = (typeof API_CONFIG !== 'undefined' && API_CONFIG.rutaBaseApp) ? API_CONFIG.rutaBaseApp() : '';
+    return base + ruta;
+  },
+
   formatoMoneda(n){ return '$' + Number(n).toFixed(2); },
 
   formatoFechaLarga(fechaStr){
@@ -1684,7 +1758,7 @@ const Vistas = {
               <label>Origen</label>
               <input type="text" id="inputOrigen" placeholder="Ciudad o aeropuerto" autocomplete="off"
                 value="${b.origen ? Util.escapeHtml(b.origen.ciudad+' ('+b.origen.codigo_iata+')') : ''}"
-                oninput="Buscador.autocompletar('origen', this.value)" onfocus="Buscador.autocompletar('origen', this.value)">
+                oninput="Buscador.autocompletar('origen', this.value)" onfocus="this.select(); Buscador.autocompletar('origen', '')">
               <div class="autocomplete-lista oculto" id="listaOrigen"></div>
             </div>
             <button class="btn-swap" type="button" onclick="Buscador.intercambiar()" aria-label="Intercambiar origen y destino">⇄</button>
@@ -1692,7 +1766,7 @@ const Vistas = {
               <label>Destino</label>
               <input type="text" id="inputDestino" placeholder="Ciudad o aeropuerto" autocomplete="off"
                 value="${b.destino ? Util.escapeHtml(b.destino.ciudad+' ('+b.destino.codigo_iata+')') : ''}"
-                oninput="Buscador.autocompletar('destino', this.value)" onfocus="Buscador.autocompletar('destino', this.value)">
+                oninput="Buscador.autocompletar('destino', this.value)" onfocus="this.select(); Buscador.autocompletar('destino', '')">
               <div class="autocomplete-lista oculto" id="listaDestino"></div>
             </div>
             <div class="campo" style="position:relative">
@@ -1750,9 +1824,14 @@ const Vistas = {
         ${Estado.aeropuertosDisponibles.filter(a=>a.codigo_iata!=='SAL').map(a=>{
           const ruta = MOCK.rutas.find(r=>r.origen_id===1 && r.destino_id===a.id);
           const vuelo = ruta ? MOCK.vuelos.find(v=>v.ruta_id===ruta.id) : null;
+          const foto = Util.fotoDestino(a.codigo_iata);
           return `
           <div class="card-destino" onclick="Vistas.irDestinoRapido(${a.id})">
-            <div class="card-destino-img">✈</div>
+            <div class="card-destino-img ${foto ? '' : 'sin-foto'}">
+              ${foto ? `<img src="${foto}" alt="${Util.escapeHtml(a.ciudad)}" loading="lazy" onerror="this.onerror=null; this.closest('.card-destino-img').classList.add('sin-foto');">` : ''}
+              <span class="card-destino-icono-fallback">✈</span>
+              <span class="card-destino-badge">${a.codigo_iata}</span>
+            </div>
             <div class="card-destino-info">
               <h4>${Util.escapeHtml(a.ciudad)}</h4>
               <span>${Util.escapeHtml(a.pais)} · ${a.codigo_iata}</span>
@@ -2355,11 +2434,20 @@ const Buscador = {
 
   autocompletar(campo, texto){
     const lista = document.getElementById(campo==='origen' ? 'listaOrigen' : 'listaDestino');
-    const q = texto.trim().toLowerCase();
-    if(q.length===0){ lista.classList.add('oculto'); lista.innerHTML=''; return; }
-    const resultados = Estado.aeropuertosDisponibles.filter(a =>
-      a.ciudad.toLowerCase().includes(q) || a.nombre.toLowerCase().includes(q) || a.codigo_iata.toLowerCase().includes(q)
-    ).slice(0,6);
+    if(!lista) return;
+    const q = (texto || '').trim().toLowerCase();
+    let listaAeropuertos = Estado.aeropuertosDisponibles || [];
+    if(campo === 'destino' && Estado.busqueda.origen){
+      listaAeropuertos = listaAeropuertos.filter(a => a.id !== Estado.busqueda.origen.id);
+    } else if(campo === 'origen' && Estado.busqueda.destino){
+      listaAeropuertos = listaAeropuertos.filter(a => a.id !== Estado.busqueda.destino.id);
+    }
+    const resultados = q.length === 0
+      ? listaAeropuertos.slice(0, 8)
+      : listaAeropuertos.filter(a =>
+          a.ciudad.toLowerCase().includes(q) || a.nombre.toLowerCase().includes(q) || a.codigo_iata.toLowerCase().includes(q)
+        ).slice(0, 8);
+
     if(resultados.length===0){ lista.innerHTML = `<div class="autocomplete-item">Sin resultados</div>`; }
     else {
       lista.innerHTML = resultados.map(a=>`
@@ -2375,6 +2463,33 @@ const Buscador = {
     Estado.busqueda[campo] = Estado.aeropuertosDisponibles.find(a=>a.id===id);
     document.getElementById(campo==='origen'?'listaOrigen':'listaDestino').classList.add('oculto');
     document.getElementById(campo==='origen'?'inputOrigen':'inputDestino').value = `${Estado.busqueda[campo].ciudad} (${Estado.busqueda[campo].codigo_iata})`;
+
+    if(campo === 'origen'){
+      // Auto-avance a Destino: enfocar y mostrar opciones inmediatamente
+      setTimeout(()=>{
+        const inputDestino = document.getElementById('inputDestino');
+        if(inputDestino){
+          inputDestino.focus();
+          Buscador.autocompletar('destino', '');
+        }
+      }, 120);
+    } else if(campo === 'destino'){
+      // Auto-avance a Salida: abrir el selector de fecha de ida
+      setTimeout(()=>{
+        if(typeof CalendarioPrecios !== 'undefined' && CalendarioPrecios.abrir){
+          CalendarioPrecios.abrir('ida');
+        }
+      }, 120);
+    }
+  },
+
+  abrirPanelPasajerosAuto(){
+    const panel = document.getElementById('panelPasajeros');
+    if(!panel) return;
+    if(panel.classList.contains('oculto')){
+      panel.classList.remove('oculto');
+      Buscador._activarCierrePanelPasajeros();
+    }
   },
 
   textoResumenPasajeros(){
@@ -3244,10 +3359,13 @@ const PostRender = {
     Asientos.render();
   },
   inicio(){
-    document.addEventListener('click', function cerrarListas(e){
-      if(!e.target.closest('#inputOrigen') && !e.target.closest('#listaOrigen')) document.getElementById('listaOrigen')?.classList.add('oculto');
-      if(!e.target.closest('#inputDestino') && !e.target.closest('#listaDestino')) document.getElementById('listaDestino')?.classList.add('oculto');
-    }, {once:true});
+    if(!this._clickListasRegistrado){
+      this._clickListasRegistrado = true;
+      document.addEventListener('click', function(e){
+        if(!e.target.closest('#inputOrigen') && !e.target.closest('#listaOrigen')) document.getElementById('listaOrigen')?.classList.add('oculto');
+        if(!e.target.closest('#inputDestino') && !e.target.closest('#listaDestino')) document.getElementById('listaDestino')?.classList.add('oculto');
+      });
+    }
   }
 };
 

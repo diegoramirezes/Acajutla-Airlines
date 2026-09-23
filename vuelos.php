@@ -139,12 +139,30 @@ const CalendarioPrecios = {
     if(tipo==='ida'){
       Estado.busqueda.fechaIda = fecha;
       if(Estado.busqueda.fechaRegreso && Estado.busqueda.fechaRegreso < fecha) Estado.busqueda.fechaRegreso = '';
-      document.getElementById('btnFechaIda').innerHTML = Util.formatoFechaLarga(fecha);
-      document.getElementById('panelCalendarioIda').classList.add('oculto');
+      const btnIda = document.getElementById('btnFechaIda');
+      if(btnIda) btnIda.innerHTML = Util.formatoFechaLarga(fecha);
+      document.getElementById('panelCalendarioIda')?.classList.add('oculto');
+
+      // Auto-avance: si es ida y vuelta abre regreso; si es solo ida pasa a pasajeros
+      setTimeout(()=>{
+        if(Estado.busqueda.tipoViaje === 'IDA_VUELTA'){
+          CalendarioPrecios.abrir('regreso');
+        } else if(typeof Buscador !== 'undefined' && Buscador.abrirPanelPasajerosAuto){
+          Buscador.abrirPanelPasajerosAuto();
+        }
+      }, 120);
     } else {
       Estado.busqueda.fechaRegreso = fecha;
-      document.getElementById('btnFechaRegreso').innerHTML = Util.formatoFechaLarga(fecha);
-      document.getElementById('panelCalendarioRegreso').classList.add('oculto');
+      const btnRegreso = document.getElementById('btnFechaRegreso');
+      if(btnRegreso) btnRegreso.innerHTML = Util.formatoFechaLarga(fecha);
+      document.getElementById('panelCalendarioRegreso')?.classList.add('oculto');
+
+      // Auto-avance: pasa al panel de pasajeros
+      setTimeout(()=>{
+        if(typeof Buscador !== 'undefined' && Buscador.abrirPanelPasajerosAuto){
+          Buscador.abrirPanelPasajerosAuto();
+        }
+      }, 120);
     }
   }
 };

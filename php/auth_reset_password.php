@@ -56,8 +56,8 @@ if(strlen($password) < 6){
     responderJson(400, ['ok' => false, 'mensaje' => 'La contraseña debe tener al menos 6 caracteres.']);
 }
 
-// 1. Consultar token válido y no expirado
-$stmt = mysqli_prepare($conexion, "SELECT email FROM password_resets WHERE token = ? AND expires_at > NOW() LIMIT 1");
+// 1. Consultar token válido (creado hace menos de 60 minutos)
+$stmt = mysqli_prepare($conexion, "SELECT email FROM password_resets WHERE token = ? AND (expires_at > NOW() OR created_at >= DATE_SUB(NOW(), INTERVAL 60 MINUTE)) LIMIT 1");
 if(!$stmt){
     error_log('[Reset Password] Error al preparar consulta token: ' . mysqli_error($conexion));
     cerrarConexion();

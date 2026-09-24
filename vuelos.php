@@ -86,7 +86,12 @@ const CalendarioPrecios = {
 
   cambiarMes(tipo, delta){
     const mesDate = tipo==='ida' ? this.mesActualIda : this.mesActualRegreso;
+    const hoy = new Date();
+    const mesMinimo = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    const mesMaximo = new Date(hoy.getFullYear(), hoy.getMonth()+6, 1);
     const nuevo = new Date(mesDate.getFullYear(), mesDate.getMonth()+delta, 1);
+    // No avanzar más allá del límite máximo ni retroceder antes del mes actual
+    if(nuevo < mesMinimo || nuevo > mesMaximo) return;
     if(tipo==='ida') this.mesActualIda = nuevo; else this.mesActualRegreso = nuevo;
     this.cargarMes(tipo);
   },
@@ -98,6 +103,12 @@ const CalendarioPrecios = {
     const b = Estado.busqueda;
     const seleccionActual = tipo==='ida' ? b.fechaIda : b.fechaRegreso;
     const nombresMes = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+
+    const hoy = new Date();
+    const mesMinimo = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    const mesMaximo = new Date(hoy.getFullYear(), hoy.getMonth()+6, 1);
+    const puedeRetroceder = mesDate > mesMinimo;
+    const puedeAvanzar   = mesDate < mesMaximo;
 
     const primerDiaSemana = (new Date(mesDate.getFullYear(), mesDate.getMonth(), 1).getDay()+6)%7; // lunes=0
     let celdas = '';
@@ -122,9 +133,9 @@ const CalendarioPrecios = {
 
     panel.innerHTML = `
       <div class="calendario-header">
-        <button type="button" onclick="CalendarioPrecios.cambiarMes('${tipo}', -1)">‹</button>
+        <button type="button" onclick="CalendarioPrecios.cambiarMes('${tipo}', -1)" ${puedeRetroceder?'':'disabled'} style="${puedeRetroceder?'':'opacity:.35;cursor:not-allowed'}">‹</button>
         <span>${nombresMes[mesDate.getMonth()]} ${mesDate.getFullYear()}</span>
-        <button type="button" onclick="CalendarioPrecios.cambiarMes('${tipo}', 1)">›</button>
+        <button type="button" onclick="CalendarioPrecios.cambiarMes('${tipo}', 1)" ${puedeAvanzar?'':'disabled'} style="${puedeAvanzar?'':'opacity:.35;cursor:not-allowed'}">›</button>
       </div>
       <div class="calendario-dias-semana"><span>L</span><span>M</span><span>X</span><span>J</span><span>V</span><span>S</span><span>D</span></div>
       <div class="calendario-grid">${celdas}</div>
@@ -406,6 +417,10 @@ Object.assign(Vistas, {
       <p class="seccion-sub">${origen?origen.ciudad+' ('+origen.codigo_iata+')':''} → ${destino?destino.ciudad+' ('+destino.codigo_iata+')':''} · ${Util.formatoFechaLarga(esRegreso?b.fechaRegreso:b.fechaIda)} · ${totalPasajeros()} pasajero(s)</p>
 
       <div id="carruselFechasCont"></div>
+
+      <div style="margin-bottom:8px">
+        <button class="btn-texto" onclick="Navegacion.atras()">← Volver a la búsqueda</button>
+      </div>
 
       <div class="layout-resultados">
         <aside class="filtros card">

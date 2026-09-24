@@ -1081,6 +1081,29 @@ const Util = {
     return fechaISO >= fechaIdaISO;
   },
 
+  // Determina si una tarifa incluye asiento preferencial/cualquiera sin costo adicional
+  tarifaIncluyeAsiento(claveTarifa){
+    return claveTarifa === 'BUSINESS' || claveTarifa === 'PRIMERA';
+  },
+
+  // Determina si una tarifa incluye un servicio adicional de cortesía ($0)
+  tarifaIncluyeServicio(claveTarifa, servicioId){
+    if(claveTarifa === 'PRIMERA'){
+      return servicioId === 'SALA_VIP' || servicioId === 'ABORDAJE_PRIORITARIO';
+    }
+    if(claveTarifa === 'BUSINESS'){
+      return servicioId === 'SALA_VIP';
+    }
+    return false;
+  },
+
+  // Determina si alguna de las tarifas elegidas en el viaje incluye un servicio dado
+  viajeIncluyeServicio(servicioId){
+    const tIda = Estado.tarifaIda;
+    const tReg = Estado.tarifaRegreso;
+    return this.tarifaIncluyeServicio(tIda, servicioId) || (tReg ? this.tarifaIncluyeServicio(tReg, servicioId) : false);
+  },
+
   // Clasifica un precio en bajo/medio/alto según el conjunto de precios disponibles (terciles reales).
   // Convierte un nivel (bajo/medio/alto) en el indicador visual $/$$/$$$
   // que usan el calendario y el carrusel de fechas (sin mostrar montos numéricos).
@@ -2105,7 +2128,13 @@ const Vistas = {
       });
       filasHtml += `<div class="fila-asientos">${celdas}</div>`;
     }
+    const seg = Estado.segmentos[segmentoIdx];
+    const claveTarifa = seg ? seg.tarifa : (segmentoIdx === 0 ? Estado.tarifaIda : Estado.tarifaRegreso);
+    const incluyeAsiento = Util.tarifaIncluyeAsiento(claveTarifa);
+    const nombreTarifa = MOCK.tarifas[claveTarifa]?.nombre || '';
+
     return `
+    ${incluyeAsiento ? `<div class="alerta alerta-exito" style="margin-bottom:14px">✨ Tu tarifa <b>${Util.escapeHtml(nombreTarifa)}</b> incluye selección de asiento (estándar, preferencial o emergencia) sin ningún cargo extra ($0.00).</div>` : ''}
     <div class="mapa-avion">
       <div class="avion-wrap">
         <div class="avion-nariz"></div>
@@ -2114,8 +2143,8 @@ const Vistas = {
           <div class="leyenda-item"><div class="leyenda-caja" style="background:#e3ecf9"></div>Disponible</div>
           <div class="leyenda-item"><div class="leyenda-caja" style="background:var(--verde)"></div>Seleccionado</div>
           <div class="leyenda-item"><div class="leyenda-caja" style="background:#d6d9de"></div>Ocupado</div>
-          <div class="leyenda-item"><div class="leyenda-caja" style="background:#ffe9b3"></div>Preferencial ($80)</div>
-          <div class="leyenda-item"><div class="leyenda-caja" style="background:#f0c3c3"></div>Emergencia ($80)</div>
+          <div class="leyenda-item"><div class="leyenda-caja" style="background:#ffe9b3"></div>Preferencial ${incluyeAsiento ? '(Incluido)' : '($80)'}</div>
+          <div class="leyenda-item"><div class="leyenda-caja" style="background:#f0c3c3"></div>Emergencia ${incluyeAsiento ? '(Incluido)' : '($80)'}</div>
         </div>
       </div>
       <div class="panel-asiento-lateral card">
@@ -2124,9 +2153,10 @@ const Vistas = {
           if(p.requiresSeat===false) return ''; // los bebés viajan en brazos y no requieren asiento
           const asignado = Estado.asientos[`${segmentoIdx}_${pi}`];
           const activo = Asientos.pasajeroActivo === pi;
+          const precioBadge = asignado ? (asignado.precio > 0 ? ` +$${asignado.precio}` : ' ($0)') : '';
           return `<div class="pasajero-asiento-fila ${activo?'activo':''}" onclick="Asientos.setPasajeroActivo(${pi})" style="cursor:pointer">
             <span>${Util.escapeHtml(p.nombres||('Pasajero '+(pi+1)))}</span>
-            ${asignado ? `<span class="chip-asiento">${asignado.codigo}</span>` : `<span class="chip-vacio">Sin asiento</span>`}
+            ${asignado ? `<span class="chip-asiento">${asignado.codigo}${precioBadge}</span>` : `<span class="chip-vacio">Sin asiento</span>`}
           </div>`;
         }).join('')}
         ${Estado.pasajeros.some(p=>p.requiresSeat===false) ? `
@@ -2979,7 +3009,15 @@ const Asientos = {
       return;
     }
     const tipo = claseTipo==='economico' ? 'ECONOMICO' : claseTipo.toUpperCase();
-    Estado.asientos[key] = {codigo, tipo, precio: MOCK.precioAsiento[tipo] || 0};
+    const seg = Estado.segmentos[segmentoIdx];
+    const claveTarifa = seg ? seg.tarifa : (segmentoIdx === 0 ? Estado.tarifaIda : Estado.tarifaRegreso);
+    const incluyeAsientoGratis = Util.tarifaIncluyeAsiento(claveTarifa);
+    const precioAsiento = incluyeAsientoGratis ? 0 : (MOCK.precioAsiento[tipo] || 0);
+
+    Estado.asientos[key] = {codigo, tipo, precio: precioAsiento};
+    if(incluyeAsientoGratis && tipo !== 'ECONOMICO'){
+      Util.mostrarToast(`Asiento ${codigo} incluido sin costo por tu tarifa ${MOCK.tarifas[claveTarifa]?.nombre || ''}`, 'exito');
+    }
     // avanzar automáticamente al siguiente pasajero que sí requiere asiento y aún no tiene uno en este segmento
     const siguiente = Estado.pasajeros.findIndex((p,i)=> p.requiresSeat && !Estado.asientos[`${segmentoIdx}_${i}`]);
     if(siguiente !== -1) this.pasajeroActivo = siguiente;

@@ -120,7 +120,7 @@ $sql = "SELECT
           AND ad.id = ?
           AND DATE(f.departure_datetime) = ?
           AND f.status <> 'cancelled'
-          AND f.departure_datetime > NOW()
+          AND f.departure_datetime > CONVERT_TZ(NOW(), '+00:00', '-06:00')
         ORDER BY f.departure_datetime ASC";
 
 $stmt = mysqli_prepare($conexion, $sql);

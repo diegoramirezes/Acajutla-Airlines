@@ -133,9 +133,9 @@ const CalendarioPrecios = {
 
     panel.innerHTML = `
       <div class="calendario-header">
-        <button type="button" onclick="CalendarioPrecios.cambiarMes('${tipo}', -1)" ${puedeRetroceder?'':'disabled'} style="${puedeRetroceder?'':'opacity:.35;cursor:not-allowed'}">‹</button>
+        <button type="button" onclick="event.stopPropagation(); CalendarioPrecios.cambiarMes('${tipo}', -1)" ${puedeRetroceder?'':'disabled'} style="${puedeRetroceder?'':'opacity:.35;cursor:not-allowed'}">‹</button>
         <span>${nombresMes[mesDate.getMonth()]} ${mesDate.getFullYear()}</span>
-        <button type="button" onclick="CalendarioPrecios.cambiarMes('${tipo}', 1)" ${puedeAvanzar?'':'disabled'} style="${puedeAvanzar?'':'opacity:.35;cursor:not-allowed'}">›</button>
+        <button type="button" onclick="event.stopPropagation(); CalendarioPrecios.cambiarMes('${tipo}', 1)" ${puedeAvanzar?'':'disabled'} style="${puedeAvanzar?'':'opacity:.35;cursor:not-allowed'}">›</button>
       </div>
       <div class="calendario-dias-semana"><span>L</span><span>M</span><span>X</span><span>J</span><span>V</span><span>S</span><span>D</span></div>
       <div class="calendario-grid">${celdas}</div>

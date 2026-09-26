@@ -1670,7 +1670,12 @@ const Api = {
     const preciosValidos = dias.filter(d=>d.disponible).map(d=>d.precio);
     dias.forEach(d=>{ d.nivel = d.disponible ? Util.getDatePriceLevel(d.precio, preciosValidos) : null; });
 
-    this._cachePreciosMes[clave] = dias;
+    // Solo cachear si hay al menos un día disponible.
+    // Si no hay vuelos este mes, NO se cachea para que vuelos nuevos
+    // que se agreguen a la BD aparezcan sin necesidad de recargar la página.
+    if(preciosValidos.length > 0){
+      this._cachePreciosMes[clave] = dias;
+    }
     return dias;
   },
 

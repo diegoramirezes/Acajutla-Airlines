@@ -1104,6 +1104,31 @@ const Util = {
     return this.tarifaIncluyeServicio(tIda, servicioId) || (tReg ? this.tarifaIncluyeServicio(tReg, servicioId) : false);
   },
 
+  // Retorna la lista detallada de servicios contratados o incluidos por pasajero
+  obtenerDetalleServicios(){
+    const lista = [];
+    if(!Array.isArray(Estado.pasajeros)) return lista;
+    const razonTarifa = (sid) => sid==='SALA_VIP' ? (Estado.tarifaIda==='PRIMERA'||Estado.tarifaRegreso==='PRIMERA'?'Primera Clase':'Business') : (sid==='ABORDAJE_PRIORITARIO'?'Primera Clase':'');
+    Estado.pasajeros.forEach((p, pi)=>{
+      const sIds = Estado.servicios[pi] || [];
+      sIds.forEach(sid=>{
+        const servMock = MOCK.servicios.find(x=>x.id===sid);
+        if(!servMock) return;
+        const incluido = this.viajeIncluyeServicio(sid);
+        lista.push({
+          pasajeroIdx: pi,
+          pasajeroNombre: (p.nombres ? `${p.nombres} ${p.apellidos||''}`.trim() : `Pasajero ${pi+1}`),
+          servicioId: sid,
+          nombre: servMock.nombre,
+          precio: incluido ? 0 : servMock.precio,
+          incluido: incluido,
+          nota: incluido ? `Incluido en tarifa ${razonTarifa(sid)}` : 'Adicional'
+        });
+      });
+    });
+    return lista;
+  },
+
   // Clasifica un precio en bajo/medio/alto según el conjunto de precios disponibles (terciles reales).
   // Convierte un nivel (bajo/medio/alto) en el indicador visual $/$$/$$$
   // que usan el calendario y el carrusel de fechas (sin mostrar montos numéricos).
@@ -1670,6 +1695,7 @@ const Api = {
       estado: reserva.estado,
       segmentos: reserva.segmentos,
       pasajeros: reserva.pasajeros,
+      servicios: reserva.servicios || [],
       // Solo el método y estado del pago; jamás número de tarjeta ni CVV.
       pago: reserva.pago ? {metodo: reserva.pago.metodo, estado: reserva.pago.estado} : null
     };
@@ -2169,6 +2195,7 @@ const Vistas = {
 
   /* ---------- SERVICIOS ---------- */
   servicios(){
+    Servicios.sincronizarIncluidos();
     return `
     <div class="pantalla contenedor" style="padding-top:24px">
       ${Vistas.breadcrumb(['Inicio','Vuelos','Asientos','Servicios'])}
@@ -2179,13 +2206,23 @@ const Vistas = {
         <h4 style="margin:18px 0 10px;color:var(--azul-oscuro)">${Util.escapeHtml(p.nombres||('Pasajero '+(pi+1)))} ${Util.escapeHtml(p.apellidos||'')}</h4>
         <div class="grid-servicios">
           ${MOCK.servicios.map(s=>{
-            const activo = (Estado.servicios[pi]||[]).includes(s.id);
-            return `<div class="servicio-card">
+            const incluido = Util.viajeIncluyeServicio(s.id);
+            const activo = incluido || (Estado.servicios[pi]||[]).includes(s.id);
+            const razon = s.id==='SALA_VIP' ? (Estado.tarifaIda==='PRIMERA'||Estado.tarifaRegreso==='PRIMERA'?'Primera Clase':'Business') : (s.id==='ABORDAJE_PRIORITARIO'?'Primera Clase':'');
+            return `<div class="servicio-card" style="${incluido?'border:1.5px solid var(--verde);background:#f9fdfb;':''}">
               <div class="icono">${s.icono}</div>
               <h4>${s.nombre}</h4>
               <p>${s.descripcion}</p>
-              <span class="precio">${Util.formatoMoneda(s.precio)}</span>
-              <label class="check-item"><input type="checkbox" ${activo?'checked':''} onchange="Servicios.toggle(${pi}, '${s.id}', this.checked)"> Agregar</label>
+              ${incluido ? `
+                <div style="margin-bottom:8px">
+                  <span class="badge badge-programado" style="background:#e2f6ea;color:#1c6b3f;font-size:.75rem;padding:3px 8px;border-radius:6px;display:inline-block">✓ Incluido en tu tarifa ${razon}</span>
+                </div>
+                <span class="precio" style="color:var(--verde);font-weight:700">$0.00 (Incluido)</span>
+                <label class="check-item" style="color:var(--verde);font-weight:600"><input type="checkbox" checked disabled> Incluido</label>
+              ` : `
+                <span class="precio">${Util.formatoMoneda(s.precio)}</span>
+                <label class="check-item"><input type="checkbox" ${activo?'checked':''} onchange="Servicios.toggle(${pi}, '${s.id}', this.checked)"> Agregar</label>
+              `}
             </div>`;
           }).join('')}
         </div>
@@ -2224,6 +2261,19 @@ const Vistas = {
           <div class="total-fila"><span>Vuelos</span><span>${Util.formatoMoneda(p.vuelos)}</span></div>
           <div class="total-fila"><span>Asientos</span><span>${Util.formatoMoneda(p.asientos)}</span></div>
           <div class="total-fila"><span>Servicios</span><span>${Util.formatoMoneda(p.servicios)}</span></div>
+          ${(()=>{
+            const detServ = Util.obtenerDetalleServicios();
+            if(!detServ.length) return '';
+            return `<div style="font-size:.78rem;background:#f8fafc;padding:8px 10px;border-radius:6px;margin:8px 0;border:1px solid #eef0f3;">
+              <b style="color:var(--azul-oscuro);display:block;margin-bottom:4px">Desglose de servicios:</b>
+              ${detServ.map(ds=>`
+                <div style="display:flex;justify-content:space-between;padding:2px 0;color:#556;">
+                  <span>${Util.escapeHtml(ds.nombre)} (${Util.escapeHtml(ds.pasajeroNombre)})</span>
+                  <span style="${ds.incluido?'color:var(--verde);font-weight:600':''}">${ds.incluido ? 'Incluido ($0)' : Util.formatoMoneda(ds.precio)}</span>
+                </div>
+              `).join('')}
+            </div>`;
+          })()}
           <div class="total-fila total-final"><span>Total</span><span>${Util.formatoMoneda(p.total)}</span></div>
           <button class="btn btn-amarillo btn-block" style="margin-top:16px" onclick="Pago.procesar()">Pagar ahora</button>
         </div>
@@ -2313,6 +2363,16 @@ const Vistas = {
           <div class="ticket-linea"><span>Pasajeros</span><b>${r.pasajeros.map(p=>p.nombres+' '+p.apellidos).join(', ')}</b></div>
           <div class="ticket-linea"><span>Estado de la reserva</span><b>${r.estado}</b></div>
           <div class="ticket-linea"><span>Método de pago</span><b>${r.pago.metodo}</b></div>
+          ${Array.isArray(r.servicios) && r.servicios.length > 0 ? `
+            <div class="ticket-perf"></div>
+            <div style="margin-bottom:6px"><b style="color:var(--azul-oscuro);font-size:.9rem">Servicios:</b></div>
+            ${r.servicios.map(s=>`
+              <div class="ticket-linea" style="font-size:.84rem;padding:6px 0">
+                <span>${Util.escapeHtml(s.nombre)} (${Util.escapeHtml(s.pasajeroNombre)}) ${s.incluido ? `<small style="color:var(--verde)">· ${Util.escapeHtml(s.nota)}</small>` : ''}</span>
+                <b>${s.incluido ? '<span style="color:var(--verde)">Incluido ($0.00)</span>' : Util.formatoMoneda(s.precio)}</b>
+              </div>
+            `).join('')}
+          ` : ''}
           <div class="ticket-linea"><span>Total pagado</span><b>${Util.formatoMoneda(r.total)}</b></div>
           ${r.contacto && r.contacto.email ? `
           <div class="alerta alerta-info" style="margin-top:18px">
@@ -2672,7 +2732,12 @@ const Precios = {
 
     let servicios = 0;
     Object.values(Estado.servicios).forEach(lista=>{
-      (lista||[]).forEach(sid=>{ const s = MOCK.servicios.find(x=>x.id===sid); if(s) servicios += s.precio; });
+      (lista||[]).forEach(sid=>{
+        if(!Util.viajeIncluyeServicio(sid)){
+          const s = MOCK.servicios.find(x=>x.id===sid);
+          if(s) servicios += s.precio;
+        }
+      });
     });
 
     Estado.precios = {vuelos, asientos, servicios, total: vuelos+asientos+servicios};
@@ -3083,7 +3148,22 @@ const Asientos = {
    16. LÓGICA — SERVICIOS
 ===================================================================== */
 const Servicios = {
+  sincronizarIncluidos(){
+    if(!Array.isArray(Estado.pasajeros)) return;
+    Estado.pasajeros.forEach((_, pi)=>{
+      if(!Estado.servicios[pi]) Estado.servicios[pi] = [];
+      MOCK.servicios.forEach(s=>{
+        if(Util.viajeIncluyeServicio(s.id)){
+          if(!Estado.servicios[pi].includes(s.id)){
+            Estado.servicios[pi].push(s.id);
+          }
+        }
+      });
+    });
+  },
+
   toggle(pasajeroIdx, servicioId, activo){
+    if(Util.viajeIncluyeServicio(servicioId)) return; // No se puede desmarcar si está incluido en la tarifa
     if(!Estado.servicios[pasajeroIdx]) Estado.servicios[pasajeroIdx] = [];
     if(activo){
       if(!Estado.servicios[pasajeroIdx].includes(servicioId)) Estado.servicios[pasajeroIdx].push(servicioId);
@@ -3207,6 +3287,7 @@ const Pago = {
         pasajeros: Estado.pasajeros.map(p=>({nombres:p.nombres, apellidos:p.apellidos, documento:p.numeroDocumento, tipo:p.type, tipoDocumento:p.tipoDocumento, nacionalidad:p.nacionalidad})),
         segmentos: segmentosPayload,
         pago: {metodo:this.metodo, estado: resultadoPago.estado || 'APROBADO', monto: Estado.precios.total, ultimos4: detalle.tarjeta_terminacion || null},
+        servicios: Util.obtenerDetalleServicios(),
         // Datos de contacto para el envío del comprobante (booking.contact)
         contacto: {
           nombre: Estado.contacto.nombre,

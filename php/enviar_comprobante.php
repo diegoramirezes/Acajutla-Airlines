@@ -125,6 +125,26 @@ foreach($payload['pasajeros'] as $p){
         </tr>';
 }
 
+$filasServicios = '';
+$tieneServicios = isset($payload['servicios']) && is_array($payload['servicios']) && count($payload['servicios']) > 0;
+if($tieneServicios){
+    foreach($payload['servicios'] as $srv){
+        if(!is_array($srv)) continue;
+        $srvNombre   = h($srv['nombre'] ?? 'Servicio');
+        $srvPax      = h($srv['pasajeroNombre'] ?? '');
+        $srvIncluido = !empty($srv['incluido']);
+        $srvNota     = h($srv['nota'] ?? ($srvIncluido ? 'Incluido en tu tarifa' : 'Adicional'));
+        $srvPrecio   = $srvIncluido ? '$0.00 (Incluido)' : ('$' . number_format((float)($srv['precio'] ?? 0), 2, '.', ','));
+
+        $filasServicios .= '
+        <tr>
+          <td style="padding:8px;border-bottom:1px solid #e2e8f0;"><b>' . $srvNombre . '</b>' . ($srvPax !== '' ? ' <span style="color:#556;font-size:12px;">(' . $srvPax . ')</span>' : '') . '</td>
+          <td style="padding:8px;border-bottom:1px solid #e2e8f0;font-size:12px;color:' . ($srvIncluido ? '#1c6b3f' : '#556') . ';">' . $srvNota . '</td>
+          <td style="padding:8px;border-bottom:1px solid #e2e8f0;font-weight:bold;color:' . ($srvIncluido ? '#1c6b3f' : '#1a2436') . ';">' . $srvPrecio . '</td>
+        </tr>';
+    }
+}
+
 function _numALetrasGrupo($num){
     $num = (int)$num;
     if($num === 0) return '';
@@ -308,6 +328,22 @@ function construirPdfComprobante($datos){
     }
     $separador(10);
 
+    $serviciosPdf = is_array($datos['servicios'] ?? null) ? $datos['servicios'] : [];
+    if(count($serviciosPdf) > 0){
+        $agregar('SERVICIOS CONTRATADOS E INCLUIDOS', 'F2', 11, $colorCorporativo, 0);
+        foreach($serviciosPdf as $srv){
+            if(!is_array($srv)) continue;
+            $srvNom = (string)($srv['nombre'] ?? 'Servicio');
+            $srvPax = (string)($srv['pasajeroNombre'] ?? '');
+            $srvInc = !empty($srv['incluido']);
+            $srvNot = (string)($srv['nota'] ?? ($srvInc ? 'Incluido en tarifa' : 'Adicional'));
+            $srvPre = $srvInc ? 'Incluido ($0.00)' : ('$' . number_format((float)($srv['precio'] ?? 0), 2, '.', ',') . ' USD');
+            $lineaSrv = '- ' . $srvNom . ($srvPax !== '' ? ' (' . $srvPax . ')' : '') . ' · ' . $srvNot . ' · ' . $srvPre;
+            $agregar($lineaSrv, 'F1', 9.5, $colorNegro, 4, 8);
+        }
+        $separador(10);
+    }
+
     $agregar('PAGO', 'F2', 11, $colorCorporativo, 0);
     $pagoMetodoPdf = is_array($datos['pago'] ?? null) ? ($datos['pago']['metodo'] ?? 'N/D') : 'N/D';
     $pagoEstadoPdf = is_array($datos['pago'] ?? null) ? ($datos['pago']['estado'] ?? 'N/D') : 'N/D';
@@ -450,6 +486,16 @@ $htmlCorreo = '<!DOCTYPE html>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;border-collapse:collapse;">
             ' . $filasPasajeros . '
           </table>
+          ' . ($tieneServicios ? '
+          <h3 style="margin:0 0 8px 0;color:#0b3d63;">Servicios contratados e incluidos</h3>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;border-collapse:collapse;">
+            <tr style="background:#eef3f8;">
+              <td style="padding:8px;font-size:12px;color:#556;">Servicio / Pasajero</td>
+              <td style="padding:8px;font-size:12px;color:#556;">Detalle</td>
+              <td style="padding:8px;font-size:12px;color:#556;">Precio</td>
+            </tr>
+            ' . $filasServicios . '
+          </table>' : '') . '
 
           <h3 style="margin:0 0 8px 0;color:#0b3d63;">Pago</h3>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:8px;">
@@ -639,6 +685,7 @@ try{
             'totalEnLetras'   => $totalEnLetras,
             'segmentos'       => $payload['segmentos'] ?? [],
             'pasajeros'       => $payload['pasajeros'] ?? [],
+            'servicios'       => $payload['servicios'] ?? [],
             'pago'            => ['metodo' => $pagoMetodo, 'estado' => $pagoEstado],
         ];
         $bytesPdf = construirPdfComprobante($datosPdf);

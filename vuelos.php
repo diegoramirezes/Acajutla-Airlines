@@ -55,7 +55,7 @@ const CalendarioPrecios = {
 
     const base = tipo==='ida'
       ? (b.fechaIda ? new Date(b.fechaIda+'T00:00:00') : new Date())
-      : (b.fechaRegreso ? new Date(b.fechaRegreso+'T00:00:00') : new Date(b.fechaIda || Date.now()));
+      : (b.fechaRegreso ? new Date(b.fechaRegreso+'T00:00:00') : (b.fechaIda ? new Date(b.fechaIda+'T00:00:00') : new Date()));
     if(tipo==='ida') this.mesActualIda = new Date(base.getFullYear(), base.getMonth(), 1);
     else this.mesActualRegreso = new Date(base.getFullYear(), base.getMonth(), 1);
 
@@ -79,7 +79,9 @@ const CalendarioPrecios = {
     const mesDate = tipo==='ida' ? this.mesActualIda : this.mesActualRegreso;
     const anioMes = `${mesDate.getFullYear()}-${String(mesDate.getMonth()+1).padStart(2,'0')}`;
     const b = Estado.busqueda;
-    const datos = await Api.getFlightPricesByDate(b.origen.id, b.destino.id, anioMes);
+    const origenId = tipo==='regreso' ? b.destino.id : b.origen.id;
+    const destinoId = tipo==='regreso' ? b.origen.id : b.destino.id;
+    const datos = await Api.getFlightPricesByDate(origenId, destinoId, anioMes);
     if(tipo==='ida') this.datosMesIda = datos; else this.datosMesRegreso = datos;
     this.render(tipo);
   },

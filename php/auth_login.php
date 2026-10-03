@@ -163,11 +163,47 @@ if($cust){
         mysqli_stmt_close($stmtVinculoEmail);
     }
 } else {
-    // Si no tiene registro en customers, usar el nombre de usuario o parte del correo
+    // Si la cuenta en users no tiene fila en customers, crearle una automáticamente
+    // para que disponga de customer_id y pueda tener sus reservas vinculadas
     $nombreFallback = explode('@', $correo)[0];
+    $nombreAuto = ucfirst($nombreFallback);
+    $cidAuto = null;
+
+    $stmtInsCust = mysqli_prepare($conexion,
+        "INSERT INTO customers (first_names, last_names, email, status, registration_date)
+         VALUES (?, '', ?, 'active', NOW())"
+    );
+    if($stmtInsCust){
+        mysqli_stmt_bind_param($stmtInsCust, 'ss', $nombreAuto, $correo);
+        if(mysqli_stmt_execute($stmtInsCust)){
+            $cidAuto = mysqli_insert_id($conexion);
+            // Vincular en users
+            $stmtUpdUser = mysqli_prepare($conexion, "UPDATE users SET customer_id = ? WHERE id = ?");
+            if($stmtUpdUser){
+                $uid = (int)$usuario['id'];
+                mysqli_stmt_bind_param($stmtUpdUser, 'ii', $cidAuto, $uid);
+                mysqli_stmt_execute($stmtUpdUser);
+                mysqli_stmt_close($stmtUpdUser);
+            }
+            // Vincular reservas de email_outbox
+            $stmtV = @mysqli_prepare($conexion,
+                "UPDATE reservations r
+                 INNER JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id = r.pnr
+                 SET r.customer_id = ?
+                 WHERE r.customer_id IS NULL AND LOWER(e.to_email) = LOWER(?)"
+            );
+            if($stmtV){
+                mysqli_stmt_bind_param($stmtV, 'is', $cidAuto, $correo);
+                @mysqli_stmt_execute($stmtV);
+                mysqli_stmt_close($stmtV);
+            }
+        }
+        mysqli_stmt_close($stmtInsCust);
+    }
+
     $clienteData = [
-        'id' => null,
-        'nombre' => ucfirst($nombreFallback),
+        'id' => $cidAuto,
+        'nombre' => $nombreAuto,
         'apellido' => '',
         'correo' => $correo,
         'telefono' => '',

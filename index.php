@@ -1536,12 +1536,15 @@ const Api = {
     }
   },
 
-  async obtenerMisReservas(customerId){
+  async obtenerMisReservas(customerId, email){
     // Conectado al backend REAL (php/mis_reservas.php), independiente de
-    // USE_MOCKS. Lista solo reservas hechas con esa cuenta ya autenticada
-    // (reservations.customer_id) — no incluye reservas hechas como invitado.
+    // USE_MOCKS. Lista reservas por customer_id o por correo electrónico.
     try{
-      const url = `${API_CONFIG.ENDPOINT_MIS_RESERVAS_REAL}?customer_id=${encodeURIComponent(customerId)}`;
+      let url = `${API_CONFIG.ENDPOINT_MIS_RESERVAS_REAL}?`;
+      const params = [];
+      if(customerId) params.push(`customer_id=${encodeURIComponent(customerId)}`);
+      if(email) params.push(`email=${encodeURIComponent(email)}`);
+      url += params.join('&');
       const resp = await fetch(url);
       const data = await resp.json().catch(()=>null);
       if(!data || !data.ok || !Array.isArray(data.data)) return [];
@@ -3740,10 +3743,10 @@ const EstadoVuelo = {
 const PostRender = {
   vuelos(){ ResultadosVuelos.cargar(); CarruselFechas.init(); },
   async perfil(){
-    if(!Estado.usuario || !Estado.usuario.id) return; // sin sesión, o cuenta interna sin customer_id
+    if(!Estado.usuario) return; // sin sesión
     const cont = document.getElementById('contenidoMisReservas');
     if(!cont) return;
-    const misReservas = await Api.obtenerMisReservas(Estado.usuario.id);
+    const misReservas = await Api.obtenerMisReservas(Estado.usuario.id, Estado.usuario.correo);
     if(misReservas.length === 0){
       cont.innerHTML = `<div class="estado-vacio"><div class="icono">🧳</div>Aún no tienes reservas.</div>`;
       return;

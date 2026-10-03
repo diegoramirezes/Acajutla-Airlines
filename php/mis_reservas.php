@@ -50,11 +50,46 @@ if(!CONEXION_OK){
 }
 
 $customerId = isset($_GET['customer_id']) ? $_GET['customer_id'] : '';
-if(!ctype_digit((string)$customerId)){
+$emailParam  = isset($_GET['email']) ? strtolower(trim((string)$_GET['email'])) : '';
+
+$customerIdInt = ctype_digit((string)$customerId) ? (int)$customerId : null;
+
+if(!$customerIdInt && (!filter_var($emailParam, FILTER_VALIDATE_EMAIL))){
     cerrarConexion();
-    responderError('customer_id debe ser un identificador numérico válido.', 400);
+    responderError('Se requiere customer_id numérico o un email válido.', 400);
 }
-$customerIdInt = (int)$customerId;
+
+// Si no se pasó customer_id pero sí email, buscar el customer_id
+if(!$customerIdInt && $emailParam !== ''){
+    $stmtC = mysqli_prepare($conexion, "SELECT id FROM customers WHERE LOWER(email) = ? LIMIT 1");
+    if($stmtC){
+        mysqli_stmt_bind_param($stmtC, 's', $emailParam);
+        mysqli_stmt_execute($stmtC);
+        $resC = mysqli_stmt_get_result($stmtC);
+        if($fC = mysqli_fetch_assoc($resC)){
+            $customerIdInt = (int)$fC['id'];
+        }
+        if($resC) mysqli_free_result($resC);
+        mysqli_stmt_close($stmtC);
+    }
+}
+
+// Obtener el correo del cliente para buscar también reservas hechas con su correo
+$emailCliente = $emailParam;
+if($customerIdInt){
+    $stmtEmailCust = mysqli_prepare($conexion, "SELECT email FROM customers WHERE id = ?");
+    if($stmtEmailCust){
+        mysqli_stmt_bind_param($stmtEmailCust, 'i', $customerIdInt);
+        mysqli_stmt_execute($stmtEmailCust);
+        $resEC = mysqli_stmt_get_result($stmtEmailCust);
+        if($filaEC = mysqli_fetch_assoc($resEC)){
+            $emailEncontrado = strtolower(trim((string)$filaEC['email']));
+            if($emailEncontrado !== '') $emailCliente = $emailEncontrado;
+        }
+        if($resEC) mysqli_free_result($resEC);
+        mysqli_stmt_close($stmtEmailCust);
+    }
+}
 
 $mapaEstado = [
     'pending' => 'PENDIENTE', 'waiting' => 'PENDIENTE',
@@ -62,22 +97,8 @@ $mapaEstado = [
     'cancelled' => 'CANCELADA',
 ];
 
-// Obtener el correo del cliente para buscar también reservas hechas con su correo
-$stmtEmailCust = mysqli_prepare($conexion, "SELECT email FROM customers WHERE id = ?");
-$emailCliente = '';
-if($stmtEmailCust){
-    mysqli_stmt_bind_param($stmtEmailCust, 'i', $customerIdInt);
-    mysqli_stmt_execute($stmtEmailCust);
-    $resEC = mysqli_stmt_get_result($stmtEmailCust);
-    if($filaEC = mysqli_fetch_assoc($resEC)){
-        $emailCliente = strtolower(trim((string)$filaEC['email']));
-    }
-    if($resEC) mysqli_free_result($resEC);
-    mysqli_stmt_close($stmtEmailCust);
-}
-
-// 1. Vincular reservas huérfanas que tengan comprobante enviado a este correo
-if($emailCliente !== ''){
+// 1. Vincular reservas huérfanas que tengan comprobante enviado a este correo si tenemos customer_id
+if($emailCliente !== '' && $customerIdInt){
     $stmtSync = @mysqli_prepare($conexion,
         "UPDATE reservations r
          INNER JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id = r.pnr
@@ -92,11 +113,11 @@ if($emailCliente !== ''){
 }
 
 // 2. Consulta principal: listar reservas por customer_id
-// O aquellas cuyo PNR esté en email_outbox enviado a su correo (por si aún no se actualizaron)
+// O aquellas cuyo PNR esté en email_outbox enviado a su correo
 $sql = "SELECT DISTINCT r.pnr, r.status, r.estimated_total, r.paid_total, r.created_at
         FROM reservations r
         LEFT JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id = r.pnr
-        WHERE r.customer_id = ?
+        WHERE ( ? IS NOT NULL AND r.customer_id = ? )
            OR ( ? <> '' AND LOWER(e.to_email) = ? )
         ORDER BY r.created_at DESC";
 $stmt = mysqli_prepare($conexion, $sql);
@@ -105,7 +126,7 @@ if(!$stmt){
     cerrarConexion();
     responderError('No se pudieron obtener tus reservas.', 500);
 }
-mysqli_stmt_bind_param($stmt, 'iss', $customerIdInt, $emailCliente, $emailCliente);
+mysqli_stmt_bind_param($stmt, 'iiss', $customerIdInt, $customerIdInt, $emailCliente, $emailCliente);
 if(!mysqli_stmt_execute($stmt)){
     error_log('[Acajutla Airlines] Error al ejecutar mis_reservas: ' . mysqli_stmt_error($stmt));
     mysqli_stmt_close($stmt);

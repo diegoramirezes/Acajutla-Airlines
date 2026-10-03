@@ -98,19 +98,20 @@ $reservationId = (int)$reserva['id'];
 //    incluso en reservas de invitado).
 $pasajeros = [];
 $stmtPax = mysqli_prepare($conexion,
-    "SELECT first_names, last_names, document_number FROM passengers WHERE reservation_id = ?"
+    "SELECT first_names, last_names, document_number, email FROM passengers WHERE reservation_id = ?"
 );
 mysqli_stmt_bind_param($stmtPax, 'i', $reservationId);
 mysqli_stmt_execute($stmtPax);
 $resPax = mysqli_stmt_get_result($stmtPax);
 while($fila = mysqli_fetch_assoc($resPax)){
-    $pasajeros[] = ['nombres' => $fila['first_names'], 'apellidos' => $fila['last_names'], 'documento' => $fila['document_number']];
+    $pasajeros[] = ['nombres' => $fila['first_names'], 'apellidos' => $fila['last_names'], 'documento' => $fila['document_number'], 'email' => $fila['email']];
 }
 if($resPax) mysqli_free_result($resPax);
 mysqli_stmt_close($stmtPax);
 
 // 3) Validar el segundo factor (ref) contra: correo del cliente, documento
-//    del cliente, o documento de cualquier pasajero. Comparación exacta,
+//    del cliente, documento de cualquier pasajero, o correo guardado en
+//    el primer pasajero (para reservas de invitado). Comparación exacta,
 //    sin distinguir mayúsculas/minúsculas para el correo.
 $refLower = strtolower($ref);
 $coincide = false;
@@ -121,6 +122,11 @@ if($reserva['cliente_email'] !== null && strtolower($reserva['cliente_email']) =
 } else {
     foreach($pasajeros as $p){
         if($p['documento'] !== null && $p['documento'] === $ref){
+            $coincide = true;
+            break;
+        }
+        // Correo guardado en el pasajero (para reservas de invitado)
+        if($p['email'] !== null && strtolower($p['email']) === $refLower){
             $coincide = true;
             break;
         }

@@ -411,6 +411,21 @@ try{
     mysqli_stmt_close($stmtPax);
     mysqli_stmt_close($stmtPais);
 
+    // 2.6-B Guardar el correo de contacto en el primer pasajero para que la
+    //       consulta por PNR pueda validar por correo incluso en reservas de
+    //       invitado. Se usa un bloque try independiente para que, si la
+    //       columna email no existiera en passengers, no revierta la reserva.
+    $contactoEmail = isset($payload['contacto']['email']) ? trim((string)$payload['contacto']['email']) : '';
+    if($contactoEmail !== '' && isset($passengerIds[0])){
+        $firstPassengerId = $passengerIds[0];
+        $stmtEmail = @mysqli_prepare($conexion, "UPDATE passengers SET email = ? WHERE id = ?");
+        if($stmtEmail){
+            mysqli_stmt_bind_param($stmtEmail, 'si', $contactoEmail, $firstPassengerId);
+            @mysqli_stmt_execute($stmtEmail); // @: si falla (columna no existe), se ignora
+            mysqli_stmt_close($stmtEmail);
+        }
+    }
+
     // 2.7 Insertar flight_segments (una fila por pasajero por segmento).
     $stmtSeg = mysqli_prepare($conexion,
         "INSERT INTO flight_segments (reservation_id, passenger_id, flight_id, fare_class, seat, paid_price, status)

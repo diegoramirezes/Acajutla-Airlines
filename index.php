@@ -1097,11 +1097,12 @@ const Util = {
     return false;
   },
 
-  // Determina si alguna de las tarifas elegidas en el viaje incluye un servicio dado
+  // Determina si la tarifa del vuelo de IDA incluye un servicio dado.
+  // Los beneficios (Sala VIP, Abordaje Prioritario) solo se otorgan
+  // cuando la clase premium es en el vuelo de ida — no en el de regreso.
   viajeIncluyeServicio(servicioId){
     const tIda = Estado.tarifaIda;
-    const tReg = Estado.tarifaRegreso;
-    return this.tarifaIncluyeServicio(tIda, servicioId) || (tReg ? this.tarifaIncluyeServicio(tReg, servicioId) : false);
+    return this.tarifaIncluyeServicio(tIda, servicioId);
   },
 
   // Retorna la lista detallada de servicios contratados o incluidos por pasajero
@@ -1150,6 +1151,20 @@ const Util = {
   // la validación real antes de enviar, no uno nuevo inventado aquí.
   filtrarSoloTexto(input){
     input.value = input.value.replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ\s']/g, '');
+  },
+
+  // Auto-formatea el campo de teléfono salvadoreño: XXXX-XXXX (solo dígitos, máx 8)
+  formatearTelefono(input){
+    let v = input.value.replace(/\D/g, '').slice(0, 8);
+    if(v.length > 4) v = v.slice(0,4) + '-' + v.slice(4);
+    input.value = v;
+  },
+
+  // Auto-formatea DUI salvadoreño: XXXXXXXX-X (8 dígitos + guión + 1 dígito)
+  formatearDUI(input){
+    let v = input.value.replace(/\D/g, '').slice(0, 9);
+    if(v.length > 8) v = v.slice(0,8) + '-' + v.slice(8);
+    input.value = v;
   },
 
   indicadorNivelPrecio(nivel){
@@ -2479,8 +2494,8 @@ const Vistas = {
           <div class="campo-form" style="margin-bottom:12px"><label>Nombre</label><input type="text" id="regNombre" onkeydown="Util.handleEnter(event,'regApellido')"></div>
           <div class="campo-form" style="margin-bottom:12px"><label>Apellido</label><input type="text" id="regApellido" onkeydown="Util.handleEnter(event,'regCorreo')"></div>
           <div class="campo-form" style="margin-bottom:12px"><label>Correo</label><input type="email" id="regCorreo" onkeydown="Util.handleEnter(event,'regTelefono')"></div>
-          <div class="campo-form" style="margin-bottom:12px"><label>Teléfono</label><input type="text" id="regTelefono" onkeydown="Util.handleEnter(event,'regDocumento')"></div>
-          <div class="campo-form" style="margin-bottom:12px"><label>Documento</label><input type="text" id="regDocumento" onkeydown="Util.handleEnter(event,'regPassword')"></div>
+          <div class="campo-form" style="margin-bottom:12px"><label>Teléfono</label><input type="tel" id="regTelefono" placeholder="XXXX-XXXX" maxlength="9" oninput="Util.formatearTelefono(this)" onkeydown="Util.handleEnter(event,'regDocumento')"></div>
+          <div class="campo-form" style="margin-bottom:12px"><label>Documento (DUI)</label><input type="text" id="regDocumento" placeholder="00000000-0" maxlength="10" oninput="Util.formatearDUI(this)" onkeydown="Util.handleEnter(event,'regPassword')"></div>
           <div class="campo-form" style="margin-bottom:12px">
             <label>Contraseña</label>
             <div style="position:relative">

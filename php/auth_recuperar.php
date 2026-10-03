@@ -56,9 +56,9 @@ if(!filter_var($correo, FILTER_VALIDATE_EMAIL)){
 }
 
 // 1. Verificar si el usuario existe y está activo
-$stmt = mysqli_prepare($conexion, "SELECT id, username FROM users WHERE email = ? AND status = 'active' LIMIT 1");
+$stmt = mysqli_prepare($conexion, "SELECT id, email FROM customers WHERE email = ? LIMIT 1");
 if(!$stmt){
-    error_log('[Recuperar Password] Error preparar consulta users: ' . mysqli_error($conexion));
+    error_log('[Recuperar Password] Error preparar consulta customers: ' . mysqli_error($conexion));
     cerrarConexion();
     responderJson(200, ['ok' => true]);
 }

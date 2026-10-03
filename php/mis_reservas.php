@@ -62,17 +62,61 @@ $mapaEstado = [
     'cancelled' => 'CANCELADA',
 ];
 
-$sql = "SELECT pnr, status, estimated_total, paid_total, created_at
-        FROM reservations
-        WHERE customer_id = ?
-        ORDER BY created_at DESC";
+// Obtener el correo del cliente para buscar también reservas hechas con su correo
+$stmtEmailCust = mysqli_prepare($conexion, "SELECT email FROM customers WHERE id = ?");
+$emailCliente = '';
+if($stmtEmailCust){
+    mysqli_stmt_bind_param($stmtEmailCust, 'i', $customerIdInt);
+    mysqli_stmt_execute($stmtEmailCust);
+    $resEC = mysqli_stmt_get_result($stmtEmailCust);
+    if($filaEC = mysqli_fetch_assoc($resEC)){
+        $emailCliente = strtolower(trim((string)$filaEC['email']));
+    }
+    if($resEC) mysqli_free_result($resEC);
+    mysqli_stmt_close($stmtEmailCust);
+}
+
+// Auto-vincular en el momento si hay reservas de este correo sin customer_id
+if($emailCliente !== ''){
+    $stmtSync = mysqli_prepare($conexion,
+        "UPDATE reservations r
+         INNER JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id = r.pnr
+         SET r.customer_id = ?
+         WHERE r.customer_id IS NULL AND LOWER(e.to_email) = ?"
+    );
+    if($stmtSync){
+        mysqli_stmt_bind_param($stmtSync, 'is', $customerIdInt, $emailCliente);
+        mysqli_stmt_execute($stmtSync);
+        mysqli_stmt_close($stmtSync);
+    }
+
+    $stmtSyncPax = mysqli_prepare($conexion,
+        "UPDATE reservations r
+         INNER JOIN passengers p ON p.reservation_id = r.id
+         SET r.customer_id = ?
+         WHERE r.customer_id IS NULL AND LOWER(p.email) = ?"
+    );
+    if($stmtSyncPax){
+        mysqli_stmt_bind_param($stmtSyncPax, 'is', $customerIdInt, $emailCliente);
+        mysqli_stmt_execute($stmtSyncPax);
+        mysqli_stmt_close($stmtSyncPax);
+    }
+}
+
+$sql = "SELECT DISTINCT r.pnr, r.status, r.estimated_total, r.paid_total, r.created_at
+        FROM reservations r
+        LEFT JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id = r.pnr
+        LEFT JOIN passengers p ON p.reservation_id = r.id
+        WHERE r.customer_id = ?
+           OR ( ? <> '' AND (LOWER(e.to_email) = ? OR LOWER(p.email) = ?) )
+        ORDER BY r.created_at DESC";
 $stmt = mysqli_prepare($conexion, $sql);
 if(!$stmt){
     error_log('[Acajutla Airlines] Error al preparar mis_reservas: ' . mysqli_error($conexion));
     cerrarConexion();
     responderError('No se pudieron obtener tus reservas.', 500);
 }
-mysqli_stmt_bind_param($stmt, 'i', $customerIdInt);
+mysqli_stmt_bind_param($stmt, 'isss', $customerIdInt, $emailCliente, $emailCliente, $emailCliente);
 if(!mysqli_stmt_execute($stmt)){
     error_log('[Acajutla Airlines] Error al ejecutar mis_reservas: ' . mysqli_stmt_error($stmt));
     mysqli_stmt_close($stmt);

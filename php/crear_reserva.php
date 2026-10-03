@@ -246,6 +246,23 @@ try{
     //     (Api.crearPago), por eso status='paid' directamente.
     $clienteId = isset($payload['cliente_id']) && ctype_digit((string)$payload['cliente_id']) ? (int)$payload['cliente_id'] : null;
 
+    // Si la reserva se hizo sin sesión iniciada pero el correo de contacto corresponde a un customer registrado,
+    // vincular la reserva automáticamente a ese customer_id.
+    $contactoEmail = isset($payload['contacto']['email']) ? trim((string)$payload['contacto']['email']) : '';
+    if(!$clienteId && filter_var($contactoEmail, FILTER_VALIDATE_EMAIL)){
+        $stmtFindCust = mysqli_prepare($conexion, "SELECT id FROM customers WHERE email = ? LIMIT 1");
+        if($stmtFindCust){
+            mysqli_stmt_bind_param($stmtFindCust, 's', $contactoEmail);
+            mysqli_stmt_execute($stmtFindCust);
+            $resFindCust = mysqli_stmt_get_result($stmtFindCust);
+            if($filaCust = mysqli_fetch_assoc($resFindCust)){
+                $clienteId = (int)$filaCust['id'];
+            }
+            if($resFindCust) mysqli_free_result($resFindCust);
+            mysqli_stmt_close($stmtFindCust);
+        }
+    }
+
     $stmtRes = mysqli_prepare($conexion,
         "INSERT INTO reservations (pnr, customer_id, status, estimated_total, paid_total, currency, created_at, payment_date, sales_channel)
          VALUES (?, ?, 'paid', ?, ?, 'USD', NOW(), NOW(), 'web')"

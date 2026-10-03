@@ -125,6 +125,33 @@ try{
     if(!mysqli_stmt_execute($stmtUser)) throw new Exception('No se pudo crear la cuenta: ' . mysqli_stmt_error($stmtUser));
     mysqli_stmt_close($stmtUser);
 
+    // Vincular retroactivamente reservas que se hayan hecho como invitado con este correo:
+    // 1) Por comprobantes enviados a este correo (email_outbox -> reservations)
+    $stmtVinculoEmail = mysqli_prepare($conexion,
+        "UPDATE reservations r
+         INNER JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id = r.pnr
+         SET r.customer_id = ?
+         WHERE r.customer_id IS NULL AND LOWER(e.to_email) = LOWER(?)"
+    );
+    if($stmtVinculoEmail){
+        mysqli_stmt_bind_param($stmtVinculoEmail, 'is', $customerId, $correo);
+        mysqli_stmt_execute($stmtVinculoEmail);
+        mysqli_stmt_close($stmtVinculoEmail);
+    }
+
+    // 2) Por pasajeros asociados con este correo (passengers.email)
+    $stmtVinculoPax = mysqli_prepare($conexion,
+        "UPDATE reservations r
+         INNER JOIN passengers p ON p.reservation_id = r.id
+         SET r.customer_id = ?
+         WHERE r.customer_id IS NULL AND LOWER(p.email) = LOWER(?)"
+    );
+    if($stmtVinculoPax){
+        mysqli_stmt_bind_param($stmtVinculoPax, 'is', $customerId, $correo);
+        mysqli_stmt_execute($stmtVinculoPax);
+        mysqli_stmt_close($stmtVinculoPax);
+    }
+
     mysqli_commit($conexion);
 
     cerrarConexion();

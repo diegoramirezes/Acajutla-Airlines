@@ -97,17 +97,39 @@ $reservationId = (int)$reserva['id'];
 // 2) Traer pasajeros reales de esta reserva (documento válido para verificar
 //    incluso en reservas de invitado).
 $pasajeros = [];
-$stmtPax = mysqli_prepare($conexion,
+$stmtPax = @mysqli_prepare($conexion,
     "SELECT first_names, last_names, document_number, email FROM passengers WHERE reservation_id = ?"
 );
-mysqli_stmt_bind_param($stmtPax, 'i', $reservationId);
-mysqli_stmt_execute($stmtPax);
-$resPax = mysqli_stmt_get_result($stmtPax);
-while($fila = mysqli_fetch_assoc($resPax)){
-    $pasajeros[] = ['nombres' => $fila['first_names'], 'apellidos' => $fila['last_names'], 'documento' => $fila['document_number'], 'email' => $fila['email']];
+// Si falla porque la columna 'email' no existe en passengers, consultar sin ella
+if(!$stmtPax){
+    $stmtPax = mysqli_prepare($conexion,
+        "SELECT first_names, last_names, document_number, NULL AS email FROM passengers WHERE reservation_id = ?"
+    );
 }
-if($resPax) mysqli_free_result($resPax);
-mysqli_stmt_close($stmtPax);
+if($stmtPax){
+    mysqli_stmt_bind_param($stmtPax, 'i', $reservationId);
+    mysqli_stmt_execute($stmtPax);
+    $resPax = mysqli_stmt_get_result($stmtPax);
+    while($fila = mysqli_fetch_assoc($resPax)){
+        $pasajeros[] = ['nombres' => $fila['first_names'], 'apellidos' => $fila['last_names'], 'documento' => $fila['document_number'], 'email' => $fila['email']];
+    }
+    if($resPax) mysqli_free_result($resPax);
+    mysqli_stmt_close($stmtPax);
+}
+
+// 2-B) Buscar también si hay un correo de comprobante asociado en email_outbox
+$correoOutbox = null;
+$stmtOutbox = mysqli_prepare($conexion, "SELECT to_email FROM email_outbox WHERE ref_type = 'reservation' AND ref_id = ? ORDER BY id DESC LIMIT 1");
+if($stmtOutbox){
+    mysqli_stmt_bind_param($stmtOutbox, 's', $pnr);
+    mysqli_stmt_execute($stmtOutbox);
+    $resOutbox = mysqli_stmt_get_result($stmtOutbox);
+    if($filaO = mysqli_fetch_assoc($resOutbox)){
+        $correoOutbox = strtolower(trim((string)$filaO['to_email']));
+    }
+    if($resOutbox) mysqli_free_result($resOutbox);
+    mysqli_stmt_close($stmtOutbox);
+}
 
 // 3) Validar el segundo factor (ref) contra: correo del cliente, documento
 //    del cliente, documento de cualquier pasajero, o correo guardado en
@@ -118,6 +140,8 @@ $coincide = false;
 if($reserva['cliente_email'] !== null && strtolower($reserva['cliente_email']) === $refLower){
     $coincide = true;
 } elseif($reserva['cliente_documento'] !== null && $reserva['cliente_documento'] === $ref){
+    $coincide = true;
+} elseif($correoOutbox !== null && $correoOutbox === $refLower){
     $coincide = true;
 } else {
     foreach($pasajeros as $p){

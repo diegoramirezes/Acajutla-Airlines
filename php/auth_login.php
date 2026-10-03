@@ -147,11 +147,11 @@ if($cust){
     ];
 
     // Vincular automáticamente reservas hechas previamente como invitado con este correo
+    // usando los registros de comprobantes enviados (email_outbox -> reservations)
     $cid = (int)$cust['id'];
     $emailCliente = $cust['email'] ?: $correo;
 
-    // 1) Por comprobantes enviados a este correo (email_outbox -> reservations)
-    $stmtVinculoEmail = mysqli_prepare($conexion,
+    $stmtVinculoEmail = @mysqli_prepare($conexion,
         "UPDATE reservations r
          INNER JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id = r.pnr
          SET r.customer_id = ?
@@ -159,21 +159,8 @@ if($cust){
     );
     if($stmtVinculoEmail){
         mysqli_stmt_bind_param($stmtVinculoEmail, 'is', $cid, $emailCliente);
-        mysqli_stmt_execute($stmtVinculoEmail);
+        @mysqli_stmt_execute($stmtVinculoEmail);
         mysqli_stmt_close($stmtVinculoEmail);
-    }
-
-    // 2) Por pasajeros asociados con este correo (passengers.email)
-    $stmtVinculoPax = mysqli_prepare($conexion,
-        "UPDATE reservations r
-         INNER JOIN passengers p ON p.reservation_id = r.id
-         SET r.customer_id = ?
-         WHERE r.customer_id IS NULL AND LOWER(p.email) = LOWER(?)"
-    );
-    if($stmtVinculoPax){
-        mysqli_stmt_bind_param($stmtVinculoPax, 'is', $cid, $emailCliente);
-        mysqli_stmt_execute($stmtVinculoPax);
-        mysqli_stmt_close($stmtVinculoPax);
     }
 } else {
     // Si no tiene registro en customers, usar el nombre de usuario o parte del correo

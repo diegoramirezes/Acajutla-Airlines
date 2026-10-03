@@ -76,9 +76,9 @@ if($stmtEmailCust){
     mysqli_stmt_close($stmtEmailCust);
 }
 
-// Auto-vincular en el momento si hay reservas de este correo sin customer_id
+// 1. Vincular reservas huérfanas que tengan comprobante enviado a este correo
 if($emailCliente !== ''){
-    $stmtSync = mysqli_prepare($conexion,
+    $stmtSync = @mysqli_prepare($conexion,
         "UPDATE reservations r
          INNER JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id = r.pnr
          SET r.customer_id = ?
@@ -86,29 +86,18 @@ if($emailCliente !== ''){
     );
     if($stmtSync){
         mysqli_stmt_bind_param($stmtSync, 'is', $customerIdInt, $emailCliente);
-        mysqli_stmt_execute($stmtSync);
+        @mysqli_stmt_execute($stmtSync);
         mysqli_stmt_close($stmtSync);
-    }
-
-    $stmtSyncPax = mysqli_prepare($conexion,
-        "UPDATE reservations r
-         INNER JOIN passengers p ON p.reservation_id = r.id
-         SET r.customer_id = ?
-         WHERE r.customer_id IS NULL AND LOWER(p.email) = ?"
-    );
-    if($stmtSyncPax){
-        mysqli_stmt_bind_param($stmtSyncPax, 'is', $customerIdInt, $emailCliente);
-        mysqli_stmt_execute($stmtSyncPax);
-        mysqli_stmt_close($stmtSyncPax);
     }
 }
 
+// 2. Consulta principal: listar reservas por customer_id
+// O aquellas cuyo PNR esté en email_outbox enviado a su correo (por si aún no se actualizaron)
 $sql = "SELECT DISTINCT r.pnr, r.status, r.estimated_total, r.paid_total, r.created_at
         FROM reservations r
         LEFT JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id = r.pnr
-        LEFT JOIN passengers p ON p.reservation_id = r.id
         WHERE r.customer_id = ?
-           OR ( ? <> '' AND (LOWER(e.to_email) = ? OR LOWER(p.email) = ?) )
+           OR ( ? <> '' AND LOWER(e.to_email) = ? )
         ORDER BY r.created_at DESC";
 $stmt = mysqli_prepare($conexion, $sql);
 if(!$stmt){
@@ -116,7 +105,7 @@ if(!$stmt){
     cerrarConexion();
     responderError('No se pudieron obtener tus reservas.', 500);
 }
-mysqli_stmt_bind_param($stmt, 'isss', $customerIdInt, $emailCliente, $emailCliente, $emailCliente);
+mysqli_stmt_bind_param($stmt, 'iss', $customerIdInt, $emailCliente, $emailCliente);
 if(!mysqli_stmt_execute($stmt)){
     error_log('[Acajutla Airlines] Error al ejecutar mis_reservas: ' . mysqli_stmt_error($stmt));
     mysqli_stmt_close($stmt);

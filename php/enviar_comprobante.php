@@ -115,15 +115,30 @@ foreach($payload['segmentos'] as $seg){
 }
 
 $filasPasajeros = '';
+$hayBebesCorreo = false;
+$mapaTiposCorreo = ['adult' => 'Adulto', 'young' => 'Joven', 'child' => 'Niño'];
 foreach($payload['pasajeros'] as $p){
     if(!is_array($p)) continue;
     $nombres   = h($p['nombres'] ?? '-');
     $apellidos = h($p['apellidos'] ?? '-');
+    $esBebe = esPasajeroBebe($p);
+    if($esBebe) $hayBebesCorreo = true;
+    if($esBebe){
+        $detalleTipo = ' <span style="color:#b45309;font-size:12px;">· Bebé: viaja en brazos con un adulto, sin asiento asignado</span>';
+    } else {
+        $tipoRaw = strtolower(trim((string)($p['tipo'] ?? '')));
+        $detalleTipo = ($tipoRaw !== '')
+            ? ' <span style="color:#889;font-size:12px;">· ' . h($mapaTiposCorreo[$tipoRaw] ?? ucfirst($tipoRaw)) . '</span>'
+            : '';
+    }
     $filasPasajeros .= '
         <tr>
-          <td style="padding:8px;border-bottom:1px solid #e2e8f0;">' . $nombres . ' ' . $apellidos . '</td>
+          <td style="padding:8px;border-bottom:1px solid #e2e8f0;">' . $nombres . ' ' . $apellidos . $detalleTipo . '</td>
         </tr>';
 }
+$notaBebesCorreo = $hayBebesCorreo
+    ? '<p style="font-size:12px;color:#b45309;margin:-12px 0 16px 0;">&#128118; Los bebés viajan en brazos acompañados de un adulto y no tienen asiento asignado.</p>'
+    : '';
 
 $filasServicios = '';
 $tieneServicios = isset($payload['servicios']) && is_array($payload['servicios']) && count($payload['servicios']) > 0;
@@ -258,6 +273,16 @@ function pdfEscaparTexto($texto){
     return str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], $texto);
 }
 
+// Un bebé viaja en brazos con un adulto y no ocupa asiento. El frontend lo
+// marca como tipo 'infant' (o requiresSeat=false en versiones previas).
+function esPasajeroBebe($p){
+    if(!is_array($p)) return false;
+    foreach(['tipo', 'type'] as $campo){
+        if(isset($p[$campo]) && is_string($p[$campo]) && strtolower(trim($p[$campo])) === 'infant') return true;
+    }
+    return array_key_exists('requiresSeat', $p) && $p['requiresSeat'] === false;
+}
+
 function construirPdfComprobante($datos){
     $anchoPagina = 595.28; $altoPagina = 841.89; // A4
     $margenIzq = 42; $margenDer = 42;
@@ -307,7 +332,11 @@ function construirPdfComprobante($datos){
                 $pax = $datos['pasajeros'][$idx] ?? null;
                 $nombrePax = is_array($pax) ? trim(($pax['nombres'] ?? '') . ' ' . ($pax['apellidos'] ?? '')) : ('Pasajero ' . ($idx + 1));
                 $strAsiento = is_scalar($asientoPax) ? (string)$asientoPax : 'Asignado';
-                $agregar('- ' . $nombrePax . '  ·  Asiento: ' . ($strAsiento ?: 'No requiere asiento'), 'F1', 9.5, $colorNegro, 1, 14);
+                if(is_array($pax) && esPasajeroBebe($pax)){
+                    $agregar('- ' . $nombrePax . '  ·  Bebé (INF): viaja en brazos con adulto, sin asiento', 'F1', 9.5, $colorNegro, 1, 14);
+                } else {
+                    $agregar('- ' . $nombrePax . '  ·  Asiento: ' . ($strAsiento ?: 'No requiere asiento'), 'F1', 9.5, $colorNegro, 1, 14);
+                }
             }
         } elseif(!empty($seg['asiento'])){
             $agregar('Asiento: ' . (string)$seg['asiento'], 'F1', 9.5, $colorNegro, 1, 14);
@@ -317,14 +346,29 @@ function construirPdfComprobante($datos){
 
     $agregar('PASAJEROS', 'F2', 11, $colorCorporativo, 0);
     $pasajeros = is_array($datos['pasajeros'] ?? null) ? $datos['pasajeros'] : [];
+    $etiquetasTipo = ['adult' => 'Adulto', 'young' => 'Joven', 'child' => 'Niño', 'infant' => 'Bebé'];
+    $hayBebes = false;
     foreach($pasajeros as $p){
         if(!is_array($p)) continue;
+        $esBebe = esPasajeroBebe($p);
+        if($esBebe) $hayBebes = true;
         $nombreCompleto = trim(($p['nombres'] ?? '') . ' ' . ($p['apellidos'] ?? ''));
         $linea = $nombreCompleto !== '' ? $nombreCompleto : 'Pasajero';
-        if(!empty($p['tipo'])) $linea .= '  ·  Tipo: ' . (string)$p['tipo'];
+        $tipoPax = strtolower(trim((string)($p['tipo'] ?? ($p['type'] ?? ''))));
+        if($esBebe){
+            $linea .= '  ·  Bebé (INF)';
+        } elseif($tipoPax !== ''){
+            $linea .= '  ·  Tipo: ' . ($etiquetasTipo[$tipoPax] ?? ucfirst($tipoPax));
+        }
         if(!empty($p['documento'])) $linea .= '  ·  Documento: ' . (string)$p['documento'];
         if(!empty($p['nacionalidad'])) $linea .= '  ·  Nacionalidad: ' . (string)$p['nacionalidad'];
         $agregar($linea, 'F1', 9.5, $colorNegro, 5);
+        if($esBebe){
+            $agregar('Viaja en brazos con un adulto acompañante y no tiene asiento asignado.', 'F1', 9, $colorGris, 1, 14);
+        }
+    }
+    if($hayBebes){
+        $agregar('IMPORTANTE: los bebés viajan en brazos con un adulto y no tienen asiento asignado.', 'F2', 9.5, [0.70, 0.38, 0.04], 6, 0);
     }
     $separador(10);
 
@@ -486,6 +530,7 @@ $htmlCorreo = '<!DOCTYPE html>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;border-collapse:collapse;">
             ' . $filasPasajeros . '
           </table>
+          ' . $notaBebesCorreo . '
           ' . ($tieneServicios ? '
           <h3 style="margin:0 0 8px 0;color:#0b3d63;">Servicios contratados e incluidos</h3>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;border-collapse:collapse;">

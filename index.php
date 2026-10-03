@@ -1105,6 +1105,31 @@ const Util = {
     return this.tarifaIncluyeServicio(tIda, servicioId);
   },
 
+  // Determina si un servicio para un pasajero específico está incluido ($0)
+  // ya sea por tarifa de IDA o porque es un bebé acompañando a un adulto responsable
+  // que tiene dicho servicio (SALA_VIP o ABORDAJE_PRIORITARIO).
+  servicioEstaIncluidoParaPasajero(pasajeroIdx, servicioId){
+    // 1. Si está incluido por tarifa de ida para todos
+    if(this.viajeIncluyeServicio(servicioId)) return true;
+
+    // 2. Si es un bebé (requiresSeat === false o type === 'infant')
+    const p = Estado.pasajeros ? Estado.pasajeros[pasajeroIdx] : null;
+    const esBebe = p && (p.requiresSeat === false || p.type === 'infant');
+
+    if(esBebe && (servicioId === 'SALA_VIP' || servicioId === 'ABORDAJE_PRIORITARIO')){
+      // Comprobar si algún adulto/responsable tiene contratado o incluido este servicio
+      const algunAdultoTiene = Estado.pasajeros.some((adulto, aIdx)=>{
+        if(adulto.requiresSeat === false || adulto.type === 'infant') return false;
+        if(this.viajeIncluyeServicio(servicioId)) return true;
+        const servsAdulto = Estado.servicios[aIdx] || [];
+        return servsAdulto.includes(servicioId);
+      });
+      if(algunAdultoTiene) return true;
+    }
+
+    return false;
+  },
+
   // Retorna la lista detallada de servicios contratados o incluidos por pasajero
   obtenerDetalleServicios(){
     const lista = [];
@@ -1115,7 +1140,18 @@ const Util = {
       sIds.forEach(sid=>{
         const servMock = MOCK.servicios.find(x=>x.id===sid);
         if(!servMock) return;
-        const incluido = this.viajeIncluyeServicio(sid);
+        const incluido = this.servicioEstaIncluidoParaPasajero(pi, sid);
+        const esBebe = (p.requiresSeat === false || p.type === 'infant');
+        let nota = 'Adicional';
+        if(incluido){
+          if(this.viajeIncluyeServicio(sid)){
+            nota = `Incluido en tarifa ${razonTarifa(sid)}`;
+          } else if(esBebe){
+            nota = 'Cortesía acompañante bebé ($0)';
+          } else {
+            nota = 'Incluido';
+          }
+        }
         lista.push({
           pasajeroIdx: pi,
           pasajeroNombre: (p.nombres ? `${p.nombres} ${p.apellidos||''}`.trim() : `Pasajero ${pi+1}`),
@@ -1123,7 +1159,7 @@ const Util = {
           nombre: servMock.nombre,
           precio: incluido ? 0 : servMock.precio,
           incluido: incluido,
-          nota: incluido ? `Incluido en tarifa ${razonTarifa(sid)}` : 'Adicional'
+          nota: nota
         });
       });
     });
@@ -2226,16 +2262,23 @@ const Vistas = {
         <h4 style="margin:18px 0 10px;color:var(--azul-oscuro)">${Util.escapeHtml(p.nombres||('Pasajero '+(pi+1)))} ${Util.escapeHtml(p.apellidos||'')}</h4>
         <div class="grid-servicios">
           ${MOCK.servicios.map(s=>{
-            const incluido = Util.viajeIncluyeServicio(s.id);
+            const incluido = Util.servicioEstaIncluidoParaPasajero(pi, s.id);
             const activo = incluido || (Estado.servicios[pi]||[]).includes(s.id);
-            const razon = s.id==='SALA_VIP' ? (Estado.tarifaIda==='PRIMERA'||Estado.tarifaRegreso==='PRIMERA'?'Primera Clase':'Business') : (s.id==='ABORDAJE_PRIORITARIO'?'Primera Clase':'');
+            const esBebe = (p.requiresSeat === false || p.type === 'infant');
+            let razonBadge = 'Incluido';
+            if(Util.viajeIncluyeServicio(s.id)){
+              const razon = s.id==='SALA_VIP' ? (Estado.tarifaIda==='PRIMERA'||Estado.tarifaRegreso==='PRIMERA'?'Primera Clase':'Business') : (s.id==='ABORDAJE_PRIORITARIO'?'Primera Clase':'');
+              razonBadge = `✓ Incluido en tu tarifa ${razon}`;
+            } else if(esBebe && (s.id==='SALA_VIP' || s.id==='ABORDAJE_PRIORITARIO')){
+              razonBadge = '✓ Cortesía acompañante bebé ($0)';
+            }
             return `<div class="servicio-card" style="${incluido?'border:1.5px solid var(--verde);background:#f9fdfb;':''}">
               <div class="icono">${s.icono}</div>
               <h4>${s.nombre}</h4>
               <p>${s.descripcion}</p>
               ${incluido ? `
                 <div style="margin-bottom:8px">
-                  <span class="badge badge-programado" style="background:#e2f6ea;color:#1c6b3f;font-size:.75rem;padding:3px 8px;border-radius:6px;display:inline-block">✓ Incluido en tu tarifa ${razon}</span>
+                  <span class="badge badge-programado" style="background:#e2f6ea;color:#1c6b3f;font-size:.75rem;padding:3px 8px;border-radius:6px;display:inline-block">${razonBadge}</span>
                 </div>
                 <span class="precio" style="color:var(--verde);font-weight:700">$0.00 (Incluido)</span>
                 <label class="check-item" style="color:var(--verde);font-weight:600"><input type="checkbox" checked disabled> Incluido</label>
@@ -2751,9 +2794,10 @@ const Precios = {
     Object.values(Estado.asientos).forEach(a=>{ asientos += a.precio; });
 
     let servicios = 0;
-    Object.values(Estado.servicios).forEach(lista=>{
+    Object.entries(Estado.servicios).forEach(([piStr, lista])=>{
+      const pi = parseInt(piStr, 10);
       (lista||[]).forEach(sid=>{
-        if(!Util.viajeIncluyeServicio(sid)){
+        if(!Util.servicioEstaIncluidoParaPasajero(pi, sid)){
           const s = MOCK.servicios.find(x=>x.id===sid);
           if(s) servicios += s.precio;
         }
@@ -3170,6 +3214,7 @@ const Asientos = {
 const Servicios = {
   sincronizarIncluidos(){
     if(!Array.isArray(Estado.pasajeros)) return;
+    // 1. Sincronizar los que vienen por tarifa para todos
     Estado.pasajeros.forEach((_, pi)=>{
       if(!Estado.servicios[pi]) Estado.servicios[pi] = [];
       MOCK.servicios.forEach(s=>{
@@ -3180,15 +3225,52 @@ const Servicios = {
         }
       });
     });
+
+    // 2. Sincronizar bebés con los servicios (SALA_VIP y ABORDAJE_PRIORITARIO) que sus responsables tengan
+    this.sincronizarBebes();
+  },
+
+  sincronizarBebes(){
+    if(!Array.isArray(Estado.pasajeros)) return;
+    const serviciosVipAdultos = {
+      SALA_VIP: false,
+      ABORDAJE_PRIORITARIO: false
+    };
+
+    Estado.pasajeros.forEach((adulto, aIdx)=>{
+      if(adulto.requiresSeat === false || adulto.type === 'infant') return;
+      const servs = Estado.servicios[aIdx] || [];
+      if(Util.viajeIncluyeServicio('SALA_VIP') || servs.includes('SALA_VIP')) serviciosVipAdultos.SALA_VIP = true;
+      if(Util.viajeIncluyeServicio('ABORDAJE_PRIORITARIO') || servs.includes('ABORDAJE_PRIORITARIO')) serviciosVipAdultos.ABORDAJE_PRIORITARIO = true;
+    });
+
+    Estado.pasajeros.forEach((p, pi)=>{
+      if(p.requiresSeat !== false && p.type !== 'infant') return; // solo bebés
+      if(!Estado.servicios[pi]) Estado.servicios[pi] = [];
+      ['SALA_VIP', 'ABORDAJE_PRIORITARIO'].forEach(sid=>{
+        if(serviciosVipAdultos[sid]){
+          if(!Estado.servicios[pi].includes(sid)) Estado.servicios[pi].push(sid);
+        } else {
+          // Si ningún adulto lo tiene, el bebé no lo tiene
+          Estado.servicios[pi] = Estado.servicios[pi].filter(id => id !== sid);
+        }
+      });
+    });
   },
 
   toggle(pasajeroIdx, servicioId, activo){
-    if(Util.viajeIncluyeServicio(servicioId)) return; // No se puede desmarcar si está incluido en la tarifa
+    if(Util.servicioEstaIncluidoParaPasajero(pasajeroIdx, servicioId)) return; // No se puede desmarcar si está incluido
     if(!Estado.servicios[pasajeroIdx]) Estado.servicios[pasajeroIdx] = [];
     if(activo){
       if(!Estado.servicios[pasajeroIdx].includes(servicioId)) Estado.servicios[pasajeroIdx].push(servicioId);
     } else {
       Estado.servicios[pasajeroIdx] = Estado.servicios[pasajeroIdx].filter(id=>id!==servicioId);
+    }
+
+    // Si un adulto cambió Sala VIP o Abordaje Prioritario, actualizar a los bebés y re-renderizar la vista
+    if(servicioId === 'SALA_VIP' || servicioId === 'ABORDAJE_PRIORITARIO'){
+      this.sincronizarBebes();
+      Render.pantalla('servicios');
     }
   }
 };

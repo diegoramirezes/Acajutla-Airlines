@@ -50,8 +50,8 @@ $sql = "SELECT f.flight_number, f.status, f.departure_datetime, f.arrival_dateti
         LEFT JOIN aircraft ac ON f.aircraft_id = ac.id
         LEFT JOIN aircraft_types act ON ac.type_id = act.id
         WHERE f.status <> 'cancelled'
-          AND f.departure_datetime <= NOW()
-          AND f.arrival_datetime >= NOW()
+          AND f.departure_datetime <= CONVERT_TZ(NOW(), '+00:00', '-06:00')
+          AND f.arrival_datetime   >= CONVERT_TZ(NOW(), '+00:00', '-06:00')
         ORDER BY f.departure_datetime ASC";
 
 $stmt = mysqli_prepare($conexion, $sql);
@@ -73,12 +73,18 @@ if($resultado === false){
     responderError('No se pudieron obtener los vuelos en vivo.', 500);
 }
 
-$ahoraTs = time();
+// Los datos en BD están en hora local El Salvador (UTC-6).
+// El servidor Aiven corre en UTC, así que strtotime() los interpreta
+// como UTC, adelantando 6 horas. Se corrige sumando 6*3600 a cada ts.
+// El reloj "ahora" también se expresa en términos de esa misma escala
+// para que el cálculo de progreso sea coherente.
+$TZ_OFFSET = 6 * 3600; // segundos de diferencia UTC → UTC-6
+$ahoraTs = time() - $TZ_OFFSET; // "ahora" en escala UTC-6
 
 $vuelos = [];
 while($fila = mysqli_fetch_assoc($resultado)){
-    $salidaTs = strtotime((string)$fila['departure_datetime']);
-    $llegadaTs = strtotime((string)$fila['arrival_datetime']);
+    $salidaTs = strtotime((string)$fila['departure_datetime']) - $TZ_OFFSET;
+    $llegadaTs = strtotime((string)$fila['arrival_datetime'])  - $TZ_OFFSET;
     if($salidaTs === false || $llegadaTs === false || $llegadaTs <= $salidaTs) continue;
 
     $progreso = ($ahoraTs - $salidaTs) / ($llegadaTs - $salidaTs);

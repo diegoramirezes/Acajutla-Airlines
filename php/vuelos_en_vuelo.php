@@ -74,17 +74,17 @@ if($resultado === false){
 }
 
 // Los datos en BD están en hora local El Salvador (UTC-6).
-// strtotime() en el servidor Aiven (UTC) interpreta esas horas como UTC,
-// quedando 6 h por debajo del timestamp UTC real. Sumando 6*3600 se
-// obtiene el timestamp UTC correcto; JS toLocaleTimeString('es-SV')
-// luego resta 6 h y muestra la hora local correcta.
-$TZ_OFFSET = 6 * 3600; // UTC-6 → UTC
-$ahoraTs   = time();   // tiempo real UTC del servidor
+// strtotime() en Aiven (UTC) los interpreta como UTC: los timestamps
+// son coherentes entre sí para calcular duración y progreso, pero
+// NO se deben convertir con toLocaleTimeString (que resta 6 h más).
+// Se devuelven las cadenas de fecha/hora tal como están en BD para que
+// el frontend las muestre directamente sin conversión de zona horaria.
+$ahoraTs = time(); // UTC real del servidor
 
 $vuelos = [];
 while($fila = mysqli_fetch_assoc($resultado)){
-    $salidaTs = strtotime((string)$fila['departure_datetime']) + $TZ_OFFSET;
-    $llegadaTs = strtotime((string)$fila['arrival_datetime'])  + $TZ_OFFSET;
+    $salidaTs = strtotime((string)$fila['departure_datetime']);
+    $llegadaTs = strtotime((string)$fila['arrival_datetime']);
     if($salidaTs === false || $llegadaTs === false || $llegadaTs <= $salidaTs) continue;
 
     $progreso = ($ahoraTs - $salidaTs) / ($llegadaTs - $salidaTs);
@@ -108,16 +108,20 @@ while($fila = mysqli_fetch_assoc($resultado)){
             'nombre' => $fila['destino_nombre'],
             'codigo_pais' => $fila['destino_pais']
         ],
-        'salida_ts' => $salidaTs,
-        'llegada_ts' => $llegadaTs,
+        'salida_ts'    => $salidaTs,
+        'llegada_ts'   => $llegadaTs,
+        // Cadenas de hora local directamente desde BD (sin conversión TZ):
+        // el frontend las usa tal cual en lugar de toLocaleTimeString(salida_ts)
+        'salida_texto'  => date('h:i a', $salidaTs),   // ej. "08:00 pm"
+        'llegada_texto' => date('h:i a', $llegadaTs),  // ej. "12:00 am"
         'progreso' => round($progreso, 4),
         'minutos_transcurridos' => (int)floor(($ahoraTs - $salidaTs) / 60),
         'minutos_restantes' => (int)ceil(($llegadaTs - $ahoraTs) / 60),
         'duracion_minutos' => $duracionMin,
         'distancia_km' => $fila['distance_km'] !== null ? (float)$fila['distance_km'] : null,
         'aeronave' => [
-            'matricula' => $fila['aeronave_matricula'],
-            'modelo' => $fila['aeronave_modelo'],
+            'matricula'  => $fila['aeronave_matricula'],
+            'modelo'     => $fila['aeronave_modelo'],
             'fabricante' => $fila['aeronave_fabricante']
         ]
     ];

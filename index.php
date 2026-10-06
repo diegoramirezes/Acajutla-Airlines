@@ -4005,8 +4005,8 @@ const VuelosEnVivo = {
     const cont = document.getElementById('envivoDetalle');
     if(!cont) return;
     const d = v.datos;
-    const hhmmsal = new Date(d.salida_ts*1000).toLocaleTimeString('es-SV',{hour:'2-digit',minute:'2-digit'});
-    const hhmmll = new Date(d.llegada_ts*1000).toLocaleTimeString('es-SV',{hour:'2-digit',minute:'2-digit'});
+    const hhmmsal = d.salida_texto  || new Date(d.salida_ts*1000).toLocaleTimeString('es-SV',{hour:'2-digit',minute:'2-digit'});
+    const hhmmll  = d.llegada_texto || new Date(d.llegada_ts*1000).toLocaleTimeString('es-SV',{hour:'2-digit',minute:'2-digit'});
     cont.innerHTML = `
       <div class="card envivo-detalle">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">

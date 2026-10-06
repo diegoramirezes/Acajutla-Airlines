@@ -101,7 +101,7 @@ $mapaEstado = [
 if($emailCliente !== '' && $customerIdInt){
     $stmtSync = @mysqli_prepare($conexion,
         "UPDATE reservations r
-         INNER JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id = r.pnr
+         INNER JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id COLLATE utf8mb4_unicode_ci = r.pnr COLLATE utf8mb4_unicode_ci
          SET r.customer_id = ?
          WHERE r.customer_id IS NULL AND LOWER(e.to_email) = ?"
     );
@@ -116,7 +116,7 @@ if($emailCliente !== '' && $customerIdInt){
 // O aquellas cuyo PNR esté en email_outbox enviado a su correo
 $sql = "SELECT DISTINCT r.pnr, r.status, r.estimated_total, r.paid_total, r.created_at
         FROM reservations r
-        LEFT JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id = r.pnr
+        LEFT JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id COLLATE utf8mb4_unicode_ci = r.pnr COLLATE utf8mb4_unicode_ci
         WHERE ( ? IS NOT NULL AND r.customer_id = ? )
            OR ( ? <> '' AND LOWER(e.to_email) = ? )
         ORDER BY r.created_at DESC";

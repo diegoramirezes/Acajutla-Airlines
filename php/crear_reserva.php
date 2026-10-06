@@ -244,13 +244,13 @@ try{
 
     // 2.5 Insertar reservations. El pago ya se procesó antes de llegar aquí
     //     (Api.crearPago), por eso status='paid' directamente.
-    $clienteId = isset($payload['cliente_id']) && ctype_digit((string)$payload['cliente_id']) ? (int)$payload['cliente_id'] : null;
+    $clienteId = isset($payload['cliente_id']) && is_numeric($payload['cliente_id']) ? (int)$payload['cliente_id'] : null;
 
     // Si la reserva se hizo sin sesión iniciada pero el correo de contacto corresponde a un customer registrado,
     // vincular la reserva automáticamente a ese customer_id.
-    $contactoEmail = isset($payload['contacto']['email']) ? trim((string)$payload['contacto']['email']) : '';
+    $contactoEmail = isset($payload['contacto']['email']) ? strtolower(trim((string)$payload['contacto']['email'])) : '';
     if(!$clienteId && filter_var($contactoEmail, FILTER_VALIDATE_EMAIL)){
-        $stmtFindCust = mysqli_prepare($conexion, "SELECT id FROM customers WHERE email = ? LIMIT 1");
+        $stmtFindCust = mysqli_prepare($conexion, "SELECT id FROM customers WHERE LOWER(email) = ? LIMIT 1");
         if($stmtFindCust){
             mysqli_stmt_bind_param($stmtFindCust, 's', $contactoEmail);
             mysqli_stmt_execute($stmtFindCust);

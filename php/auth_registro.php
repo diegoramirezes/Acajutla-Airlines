@@ -129,7 +129,7 @@ try{
     // usando los comprobantes enviados a este correo (email_outbox -> reservations)
     $stmtVinculoEmail = @mysqli_prepare($conexion,
         "UPDATE reservations r
-         INNER JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id = r.pnr
+         INNER JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id COLLATE utf8mb4_unicode_ci = r.pnr COLLATE utf8mb4_unicode_ci
          SET r.customer_id = ?
          WHERE r.customer_id IS NULL AND LOWER(e.to_email) = LOWER(?)"
     );

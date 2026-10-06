@@ -153,7 +153,7 @@ if($cust){
 
     $stmtVinculoEmail = @mysqli_prepare($conexion,
         "UPDATE reservations r
-         INNER JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id = r.pnr
+         INNER JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id COLLATE utf8mb4_unicode_ci = r.pnr COLLATE utf8mb4_unicode_ci
          SET r.customer_id = ?
          WHERE r.customer_id IS NULL AND LOWER(e.to_email) = LOWER(?)"
     );
@@ -170,12 +170,14 @@ if($cust){
     $cidAuto = null;
 
     $stmtInsCust = mysqli_prepare($conexion,
-        "INSERT INTO customers (first_names, last_names, email, status, registration_date)
-         VALUES (?, '', ?, 'active', NOW())"
+        "INSERT INTO customers (first_names, last_names, document_type, document_number, email, status, registration_date)
+         VALUES (?, '', 'DUI', '00000000-0', ?, 'active', NOW())"
     );
     if($stmtInsCust){
         mysqli_stmt_bind_param($stmtInsCust, 'ss', $nombreAuto, $correo);
-        if(mysqli_stmt_execute($stmtInsCust)){
+        if(!mysqli_stmt_execute($stmtInsCust)){
+            error_log('[Acajutla Airlines] Error insertando cliente auto en login: ' . mysqli_stmt_error($stmtInsCust));
+        } else {
             $cidAuto = mysqli_insert_id($conexion);
             // Vincular en users
             $stmtUpdUser = mysqli_prepare($conexion, "UPDATE users SET customer_id = ? WHERE id = ?");
@@ -185,10 +187,10 @@ if($cust){
                 mysqli_stmt_execute($stmtUpdUser);
                 mysqli_stmt_close($stmtUpdUser);
             }
-            // Vincular reservas de email_outbox
+            // Vincular reservas de email_outbox (con COLLATE para evitar error 1267)
             $stmtV = @mysqli_prepare($conexion,
                 "UPDATE reservations r
-                 INNER JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id = r.pnr
+                 INNER JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id COLLATE utf8mb4_unicode_ci = r.pnr COLLATE utf8mb4_unicode_ci
                  SET r.customer_id = ?
                  WHERE r.customer_id IS NULL AND LOWER(e.to_email) = LOWER(?)"
             );

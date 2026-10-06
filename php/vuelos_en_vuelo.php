@@ -77,9 +77,10 @@ if($resultado === false){
 // strtotime() en Aiven (UTC) los interpreta como UTC: los timestamps
 // son coherentes entre sí para calcular duración y progreso, pero
 // NO se deben convertir con toLocaleTimeString (que resta 6 h más).
-// Se devuelven las cadenas de fecha/hora tal como están en BD para que
-// el frontend las muestre directamente sin conversión de zona horaria.
-$ahoraTs = time(); // UTC real del servidor
+// $ahoraTs debe estar en la misma escala que los timestamps de BD
+// (hora local SV leída como si fuera UTC por strtotime en Aiven).
+// time() es UTC real → restar 6h da la hora local SV en esa misma escala.
+$ahoraTs = time() - 6 * 3600;
 
 $vuelos = [];
 while($fila = mysqli_fetch_assoc($resultado)){

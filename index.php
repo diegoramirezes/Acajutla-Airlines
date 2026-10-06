@@ -6,6 +6,8 @@
 <title>Acajutla Airlines | Reserva de Vuelos</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQ3ynhWPXnRZJlvE03KpSMbMIl7nK2I=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <style>
 /* =========================================================
    1. VARIABLES GLOBALES
@@ -597,6 +599,47 @@ a{text-decoration:none;color:inherit;}
   color:#889;cursor:pointer;background:none;border:none;line-height:1;
 }
 .modal-recuperar-cerrar:hover{color:var(--rojo);}
+
+/* === VUELOS EN VIVO (mapa tipo FlightRadar24) === */
+.envivo-layout{display:grid;grid-template-columns:1fr 320px;gap:18px;align-items:start;}
+.envivo-mapa{height:60vh;min-height:420px;width:100%;background:var(--gris-claro);}
+.envivo-leyenda{
+  display:flex;align-items:center;gap:8px;padding:10px 16px;font-size:.78rem;
+  color:#667;border-top:1px solid #e8edf3;
+}
+.envivo-punto{width:8px;height:8px;border-radius:50%;background:var(--verde);display:inline-block;animation:envivo-parpadeo 1.6s infinite;}
+@keyframes envivo-parpadeo{0%,100%{opacity:1;}50%{opacity:.25;}}
+.envivo-panel{display:flex;flex-direction:column;gap:12px;max-height:72vh;overflow-y:auto;padding-right:2px;}
+.envivo-contador{font-size:.9rem;color:var(--gris-oscuro);}
+.envivo-contador b{color:var(--azul);font-size:1.15rem;}
+.envivo-card{
+  background:#fff;border:1px solid #e2e8f0;border-radius:var(--radio);
+  padding:12px 14px;cursor:pointer;transition:border-color .15s, box-shadow .15s;
+}
+.envivo-card:hover{border-color:var(--azul);}
+.envivo-card.activa{border-color:var(--azul);box-shadow:0 0 0 2px rgba(0,59,149,.12);}
+.envivo-card-titulo{display:flex;justify-content:space-between;align-items:center;font-size:.85rem;color:#667;}
+.envivo-card-titulo b{color:var(--azul-oscuro);font-size:.95rem;}
+.envivo-card-barra{height:4px;border-radius:2px;background:#e6ecf3;overflow:hidden;margin:10px 0 6px;}
+.envivo-card-barra div{height:100%;background:var(--azul);transition:width 1s linear;}
+.envivo-card-info{font-size:.76rem;color:#889;}
+.envivo-detalle{animation:envivo-entra .2s ease;}
+@keyframes envivo-entra{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
+.envivo-cerrar{
+  background:none;border:none;color:#889;cursor:pointer;font-size:1rem;line-height:1;
+}
+.envivo-cerrar:hover{color:var(--rojo);}
+.envivo-avion-icon{background:none;border:none;}
+.envivo-avion{
+  font-size:22px;color:var(--amarillo);text-shadow:0 0 3px rgba(0,40,85,.85), 0 1px 2px rgba(0,40,85,.6);
+  display:flex;align-items:center;justify-content:center;width:34px;height:34px;
+  cursor:pointer;transform-origin:center;
+}
+.leaflet-container{font-family:inherit;}
+@media(max-width:900px){
+  .envivo-layout{grid-template-columns:1fr;}
+  .envivo-panel{max-height:none;overflow:visible;}
+}
 </style>
 </head>
 <body>
@@ -615,6 +658,7 @@ a{text-decoration:none;color:inherit;}
       <button onclick="Navegacion.ir('vuelos')" data-ruta="vuelos">Buscar vuelos</button>
       <button onclick="Navegacion.ir('consultarReserva')" data-ruta="consultarReserva">Mis reservas</button>
       <button onclick="Navegacion.ir('estadoVuelo')" data-ruta="estadoVuelo">Estado de vuelo</button>
+      <button onclick="Navegacion.ir('vuelosEnVivo')" data-ruta="vuelosEnVivo">Vuelos en vivo</button>
       <button class="nav-cta" id="btnAuthNav" onclick="Navegacion.ir('login')">Iniciar sesión</button>
     </div>
     <button class="hamburguesa" id="btnHamburguesa" aria-label="Abrir menú"><span></span><span></span><span></span></button>
@@ -638,6 +682,7 @@ a{text-decoration:none;color:inherit;}
         <li><a href="#" onclick="Navegacion.ir('vuelos')">Buscar vuelos</a></li>
         <li><a href="#" onclick="Navegacion.ir('consultarReserva')">Consultar reserva</a></li>
         <li><a href="#" onclick="Navegacion.ir('estadoVuelo')">Estado de vuelo</a></li>
+        <li><a href="#" onclick="Navegacion.ir('vuelosEnVivo')">Vuelos en vivo</a></li>
       </ul>
     </div>
     <div>
@@ -727,6 +772,7 @@ const API_CONFIG = {
   get ENDPOINT_MIS_RESERVAS_REAL(){ return this.rutaBaseApp() + 'php/mis_reservas.php'; },
   get ENDPOINT_CONSULTAR_RESERVA_REAL(){ return this.rutaBaseApp() + 'php/consultar_reserva.php'; },
   get ENDPOINT_ESTADO_VUELO_REAL(){ return this.rutaBaseApp() + 'php/estado_vuelo.php'; },
+  get ENDPOINT_VUELOS_EN_VIVO_REAL(){ return this.rutaBaseApp() + 'php/vuelos_en_vuelo.php'; },
   get ENDPOINT_PAISES_REAL(){ return this.rutaBaseApp() + 'php/paises.php'; },
   get ENDPOINT_RECUPERAR_REAL(){ return this.rutaBaseApp() + 'php/auth_recuperar.php'; },
   get ENDPOINT_RESET_PASSWORD_REAL(){ return this.rutaBaseApp() + 'php/auth_reset_password.php'; }
@@ -965,6 +1011,16 @@ const Util = {
   },
 
   formatoMoneda(n){ return '$' + Number(n).toFixed(2); },
+
+  formatoNumero(n){ return Number(n).toLocaleString('es-SV', {maximumFractionDigits:0}); },
+
+  // minutos decimales -> "2 h 15 min" / "45 min"
+  formatoDuracion(minutos){
+    const min = Math.max(0, Math.round(Number(minutos)||0));
+    const h = Math.floor(min/60), m = min%60;
+    if(h === 0) return `${m} min`;
+    return m === 0 ? `${h} h` : `${h} h ${m} min`;
+  },
 
   formatoFechaLarga(fechaStr){
     if(!fechaStr) return '';
@@ -1665,6 +1721,20 @@ const Api = {
     }
   },
 
+  async obtenerVuelosEnVivo(){
+    // Conectado al backend REAL (php/vuelos_en_vuelo.php), independiente de
+    // USE_MOCKS (misma técnica que consultarEstadoVuelo).
+    try{
+      const resp = await fetch(API_CONFIG.ENDPOINT_VUELOS_EN_VIVO_REAL);
+      const data = await resp.json().catch(()=>null);
+      if(!data || !data.ok || !Array.isArray(data.data)) return null;
+      return {ahoraTs: data.ahora_ts, vuelos: data.data};
+    } catch(e){
+      console.error('obtenerVuelosEnVivo() falló al consultar el backend real', e);
+      return null;
+    }
+  },
+
   async buscarPaises(q){
     // Conectado al backend REAL (php/paises.php), tabla countries.
     try{
@@ -1853,7 +1923,8 @@ const Render = {
       login: Vistas.login,
       registro: Vistas.registro,
       perfil: Vistas.perfil,
-      estadoVuelo: Vistas.estadoVuelo
+      estadoVuelo: Vistas.estadoVuelo,
+      vuelosEnVivo: Vistas.vuelosEnVivo
     };
     app.innerHTML = (vistas[ruta] || Vistas.inicio)();
     if(PostRender[ruta]) PostRender[ruta]();
@@ -2607,6 +2678,28 @@ const Vistas = {
         <button class="btn btn-primario btn-block" onclick="EstadoVuelo.buscar()">Consultar</button>
       </div>
       <div id="resultadoEstadoVuelo" style="margin-top:24px;max-width:760px"></div>
+    </div>`;
+  },
+
+  /* ---------- VUELOS EN VIVO (mapa tipo FlightRadar24) ---------- */
+  vuelosEnVivo(){
+    return `
+    <div class="pantalla contenedor" style="padding-top:24px">
+      <div class="seccion-titulo">Vuelos en vivo</div>
+      <p class="seccion-sub">Nuestra flota en el aire en este momento, actualizado en tiempo real</p>
+      <div class="envivo-layout">
+        <div class="envivo-mapa-wrap card" style="padding:0;overflow:hidden">
+          <div id="mapaVuelosEnVivo" class="envivo-mapa"></div>
+          <div class="envivo-leyenda">
+            <span class="envivo-punto"></span> Actualización automática cada segundo
+          </div>
+        </div>
+        <div class="envivo-panel">
+          <div class="envivo-contador"><b id="envivoContador">0</b> aviones en el aire</div>
+          <div id="envivoListaVuelos"><div class="estado-vacio"><div class="icono">⏳</div>Cargando vuelos...</div></div>
+          <div id="envivoDetalle"></div>
+        </div>
+      </div>
     </div>`;
   }
 };
@@ -3738,10 +3831,248 @@ const EstadoVuelo = {
 };
 
 /* =====================================================================
+   20-B. LÓGICA — VUELOS EN VIVO (mapa tipo FlightRadar24)
+   Los aviones en el aire se calculan con los horarios reales de la BD;
+   la posición se interpola sobre la ruta ortodrómica entre aeropuertos.
+   Coordenadas fijas por código IATA (la tabla airports no tiene lat/lng).
+===================================================================== */
+const VuelosEnVivo = {
+  mapa: null,
+  intervaloTick: null,
+  intervaloRefresco: null,
+  vuelos: {},            // numero_vuelo -> {datos, marcador, polyline, progreso}
+  offsetServidor: 0,     // Date.now()/1000 - reloj del servidor
+  seleccionado: null,
+
+  COORDENADAS: {
+    SAL: [13.4409, -89.0558],  // San Salvador
+    GUA: [14.5833, -90.5275],  // Ciudad de Guatemala
+    MGA: [12.1408, -86.1736],  // Managua
+    SJO: [9.9939, -84.2088],   // San José
+    LIR: [10.5931, -85.5439],  // Liberia
+    TGU: [14.0608, -87.2172],  // Tegucigalpa
+    CUN: [21.0365, -86.8771],  // Cancún
+    MEX: [19.4363, -99.0721],  // Ciudad de México
+    PTY: [9.0714, -79.3835],   // Panamá
+    BOG: [4.7016, -74.1469],   // Bogotá
+    MIA: [25.7959, -80.2870],  // Miami
+    JFK: [40.6413, -73.7781],  // Nueva York
+    LAX: [33.9416, -118.4085], // Los Ángeles
+    SFO: [37.6213, -122.3790], // San Francisco
+    MAD: [40.4983, -3.5676]    // Madrid
+  },
+
+  iniciar(){
+    this.detener();
+    const contMapa = document.getElementById('mapaVuelosEnVivo');
+    if(!contMapa) return;
+    if(typeof L === 'undefined'){
+      contMapa.innerHTML = '';
+      document.getElementById('envivoListaVuelos').innerHTML = `<div class="estado-vacio"><div class="icono">🗺️</div>No se pudo cargar el mapa (sin conexión a internet).</div>`;
+      return;
+    }
+    this.mapa = L.map(contMapa, {zoomControl:true, attributionControl:true}).setView([14.5, -87.5], 5);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 12,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    }).addTo(this.mapa);
+    // El contenedor puede tardar en asentar su tamaño dentro del SPA:
+    // sin invalidateSize las teselas quedan desalineadas o fragmentadas.
+    setTimeout(()=>{ if(this.mapa) this.mapa.invalidateSize(); }, 250);
+    setTimeout(()=>{ if(this.mapa) this.mapa.invalidateSize(); }, 1200);
+    this.refrescar();
+    this.intervaloTick = setInterval(()=>this.tick(), 1000);
+    this.intervaloRefresco = setInterval(()=>this.refrescar(), 60000);
+  },
+
+  detener(){
+    if(this.intervaloTick){ clearInterval(this.intervaloTick); this.intervaloTick = null; }
+    if(this.intervaloRefresco){ clearInterval(this.intervaloRefresco); this.intervaloRefresco = null; }
+    if(this.mapa){ try{ this.mapa.remove(); }catch(e){} this.mapa = null; }
+    this.vuelos = {};
+    this.seleccionado = null;
+  },
+
+  ahoraServidor(){
+    return Date.now()/1000 - this.offsetServidor;
+  },
+
+  async refrescar(){
+    // Guard de ruta: si el usuario salió de la sección, limpiar y no seguir.
+    if(Estado.ruta !== 'vuelosEnVivo'){ this.detener(); return; }
+    const res = await Api.obtenerVuelosEnVivo();
+    if(Estado.ruta !== 'vuelosEnVivo'){ this.detener(); return; }
+    const lista = document.getElementById('envivoListaVuelos');
+    if(!res){
+      if(lista) lista.innerHTML = `<div class="estado-vacio"><div class="icono">⚠️</div>No se pudieron cargar los vuelos en vivo.</div>`;
+      return;
+    }
+    this.offsetServidor = Date.now()/1000 - res.ahoraTs;
+    const recibidos = res.vuelos.filter(v => this.COORDENADAS[v.origen.codigo_iata] && this.COORDENADAS[v.destino.codigo_iata]);
+
+    // Quitar vuelos que ya aterrizaron o desaparecieron del backend
+    Object.keys(this.vuelos).forEach(nv => {
+      if(!recibidos.some(v => v.numero_vuelo === nv)){
+        if(this.seleccionado === nv){ this.seleccionado = null; const d = document.getElementById('envivoDetalle'); if(d) d.innerHTML=''; }
+        this.mapa.removeLayer(this.vuelos[nv].marcador);
+        this.mapa.removeLayer(this.vuelos[nv].polyline);
+        delete this.vuelos[nv];
+      }
+    });
+
+    let primero = true;
+    recibidos.forEach(v => {
+      const existente = this.vuelos[v.numero_vuelo];
+      if(existente){
+        existente.datos = v; // solo actualizar datos (evita parpadeo de marcadores)
+      } else {
+        this.crearVuelo(v);
+        if(primero) this.mapa.setView(this.COORDENADAS[v.origen.codigo_iata], 4);
+        primero = false;
+      }
+    });
+
+    const contador = document.getElementById('envivoContador');
+    if(contador) contador.textContent = recibidos.length;
+    if(lista){
+      lista.innerHTML = recibidos.length === 0
+        ? `<div class="estado-vacio"><div class="icono">🛫</div>No hay aviones de Acajutla Airlines en el aire en este momento.</div>`
+        : recibidos.map(v => `
+          <div class="envivo-card ${this.seleccionado===v.numero_vuelo?'activa':''}" onclick="VuelosEnVivo.seleccionar('${v.numero_vuelo}')">
+            <div class="envivo-card-titulo"><b>${v.numero_vuelo}</b><span>${v.origen.codigo_iata} → ${v.destino.codigo_iata}</span></div>
+            <div class="envivo-card-progreso"><div class="envivo-card-barra"><div id="envivoBarra_${v.numero_vuelo}"></div></div></div>
+            <div class="envivo-card-info" id="envivoInfo_${v.numero_vuelo}"></div>
+          </div>`).join('');
+    }
+    this.tick();
+  },
+
+  crearVuelo(v){
+    const cOrigen = this.COORDENADAS[v.origen.codigo_iata];
+    const cDestino = this.COORDENADAS[v.destino.codigo_iata];
+    const rumbo = this.rumbo(cOrigen, cDestino);
+    const icono = L.divIcon({
+      className: 'envivo-avion-icon',
+      html: `<div class="envivo-avion" style="transform:rotate(${rumbo}deg)">✈</div>`,
+      iconSize: [34, 34],
+      iconAnchor: [17, 17]
+    });
+    const marcador = L.marker(cOrigen, {icon: icono})
+      .addTo(this.mapa)
+      .on('click', ()=>this.seleccionar(v.numero_vuelo));
+    const polyline = L.polyline([cOrigen, cDestino], {color:'#003B95', weight:1.5, opacity:0.55, dashArray:'6,6'})
+      .addTo(this.mapa)
+      .on('click', ()=>this.seleccionar(v.numero_vuelo));
+    L.circleMarker(cOrigen, {radius:4, color:'#003B95', fillOpacity:1}).addTo(this.mapa).bindTooltip(`${v.origen.codigo_iata} · ${v.origen.ciudad}`);
+    L.circleMarker(cDestino, {radius:4, color:'#2E8B57', fillOpacity:1}).addTo(this.mapa).bindTooltip(`${v.destino.codigo_iata} · ${v.destino.ciudad}`);
+    this.vuelos[v.numero_vuelo] = {datos: v, marcador, polyline, progreso: v.progreso};
+  },
+
+  seleccionar(numeroVuelo){
+    const v = this.vuelos[numeroVuelo];
+    if(!v) return;
+    this.seleccionado = numeroVuelo;
+    this.mapa.setView(v.marcador.getLatLng(), 6);
+    document.querySelectorAll('.envivo-card').forEach(el => el.classList.remove('activa'));
+    const card = document.getElementById('envivoInfo_' + numeroVuelo)?.closest('.envivo-card');
+    if(card) card.classList.add('activa');
+    this.pintarDetalle(v);
+  },
+
+  pintarDetalle(v){
+    const cont = document.getElementById('envivoDetalle');
+    if(!cont) return;
+    const d = v.datos;
+    const hhmmsal = new Date(d.salida_ts*1000).toLocaleTimeString('es-SV',{hour:'2-digit',minute:'2-digit'});
+    const hhmmll = new Date(d.llegada_ts*1000).toLocaleTimeString('es-SV',{hour:'2-digit',minute:'2-digit'});
+    cont.innerHTML = `
+      <div class="card envivo-detalle">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <h3 style="color:var(--azul-oscuro)">Vuelo ${d.numero_vuelo}</h3>
+          <button class="envivo-cerrar" onclick="VuelosEnVivo.cerrarDetalle()">✕</button>
+        </div>
+        <div class="resumen-item"><h4>Ruta</h4><p>${d.origen.ciudad} (${d.origen.codigo_iata}) → ${d.destino.ciudad} (${d.destino.codigo_iata})</p></div>
+        <div class="resumen-item"><h4>Horario</h4><p>Salida ${hhmmsal} · Llegada ${hhmmll}</p></div>
+        <div class="resumen-item"><h4>Tiempo de vuelo</h4><p id="envivoDetTranscurrido"></p></div>
+        <div class="resumen-item"><h4>Tiempo restante</h4><p id="envivoDetRestante"></p></div>
+        <div class="resumen-item"><h4>Distancia total</h4><p>${d.distancia_km!==null ? Util.formatoNumero(d.distancia_km)+' km' : 'N/D'}</p></div>
+        <div class="resumen-item"><h4>Distancia restante</h4><p id="envivoDetDistRestante"></p></div>
+        ${d.aeronave.matricula ? `<div class="resumen-item"><h4>Aeronave</h4><p>${d.aeronave.matricula} · ${d.aeronave.fabricante||''} ${d.aeronave.modelo||''}</p></div>` : ''}
+      </div>`;
+    this.actualizarDetalle(v);
+  },
+
+  cerrarDetalle(){
+    this.seleccionado = null;
+    const cont = document.getElementById('envivoDetalle');
+    if(cont) cont.innerHTML = '';
+    document.querySelectorAll('.envivo-card').forEach(el => el.classList.remove('activa'));
+  },
+
+  tick(){
+    // Guard de ruta: el SPA no tiene hook de salida, así que el propio tick
+    // detecta que se abandonó la sección y libera mapa e intervalos.
+    if(Estado.ruta !== 'vuelosEnVivo'){ this.detener(); return; }
+    const ahora = this.ahoraServidor();
+    Object.values(this.vuelos).forEach(v => {
+      const d = v.datos;
+      const progreso = Math.min(1, Math.max(0, (ahora - d.salida_ts) / (d.llegada_ts - d.salida_ts)));
+      v.progreso = progreso;
+      const pos = this.interpolar(
+        this.COORDENADAS[d.origen.codigo_iata],
+        this.COORDENADAS[d.destino.codigo_iata],
+        progreso
+      );
+      v.marcador.setLatLng(pos);
+      // Actualizar tarjetas de la lista
+      const barra = document.getElementById('envivoBarra_' + d.numero_vuelo);
+      if(barra) barra.style.width = (progreso*100).toFixed(1) + '%';
+      const info = document.getElementById('envivoInfo_' + d.numero_vuelo);
+      if(info) info.textContent = `${Util.formatoDuracion((ahora-d.salida_ts)/60)} transcurridos · quedan ${Util.formatoDuracion((d.llegada_ts-ahora)/60)}`;
+      if(this.seleccionado === d.numero_vuelo) this.actualizarDetalle(v);
+    });
+  },
+
+  actualizarDetalle(v){
+    const ahora = this.ahoraServidor();
+    const d = v.datos;
+    const tTrans = document.getElementById('envivoDetTranscurrido');
+    const tRest = document.getElementById('envivoDetRestante');
+    const dRest = document.getElementById('envivoDetDistRestante');
+    if(tTrans) tTrans.textContent = `${Util.formatoDuracion((ahora-d.salida_ts)/60)} (${Math.round(v.progreso*100)}% del trayecto)`;
+    if(tRest) tRest.textContent = Util.formatoDuracion((d.llegada_ts-ahora)/60);
+    if(dRest) dRest.textContent = d.distancia_km!==null ? Util.formatoNumero(Math.max(0, d.distancia_km*(1-v.progreso)))+' km' : 'N/D';
+  },
+
+  // ----- Matemática de rutas ortodrómicas (tierra esférica, R=6371 km) -----
+  rumbo(a, b){
+    const rad = Math.PI/180;
+    const lat1=a[0]*rad, lat2=b[0]*rad, dLng=(b[1]-a[1])*rad;
+    const y = Math.sin(dLng)*Math.cos(lat2);
+    const x = Math.cos(lat1)*Math.sin(lat2)-Math.sin(lat1)*Math.cos(lat2)*Math.cos(dLng);
+    return (Math.atan2(y,x)*180/Math.PI + 360) % 360;
+  },
+
+  interpolar(a, b, fraccion){
+    const rad = Math.PI/180;
+    const lat1=a[0]*rad, lng1=a[1]*rad, lat2=b[0]*rad, lng2=b[1]*rad;
+    const d = 2*Math.asin(Math.sqrt(Math.sin((lat2-lat1)/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin((lng2-lng1)/2)**2));
+    if(d === 0) return a;
+    const A = Math.sin((1-fraccion)*d)/Math.sin(d);
+    const B = Math.sin(fraccion*d)/Math.sin(d);
+    const x = A*Math.cos(lat1)*Math.cos(lng1) + B*Math.cos(lat2)*Math.cos(lng2);
+    const y = A*Math.cos(lat1)*Math.sin(lng1) + B*Math.cos(lat2)*Math.sin(lng2);
+    const z = A*Math.sin(lat1) + B*Math.sin(lat2);
+    return [Math.atan2(z, Math.sqrt(x*x+y*y))/rad, Math.atan2(y,x)/rad];
+  }
+};
+
+/* =====================================================================
    21. POST-RENDER (acciones a ejecutar tras pintar cada pantalla)
 ===================================================================== */
 const PostRender = {
   vuelos(){ ResultadosVuelos.cargar(); CarruselFechas.init(); },
+  vuelosEnVivo(){ VuelosEnVivo.iniciar(); },
   async perfil(){
     if(!Estado.usuario) return; // sin sesión
     const cont = document.getElementById('contenidoMisReservas');

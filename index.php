@@ -974,6 +974,39 @@ const Estado = {
   usuario: null // sesión simulada
 };
 
+/* -----------------------------------------------------------------------
+   PERSISTENCIA DEL ESTADO (localStorage)
+   Evita perder la sesión, vuelos, asientos, pasajeros y contacto al
+   recerrar la página. Se guarda en cada navegación y antes de descargar.
+   aeropuertosDisponibles NO se guarda: se recarga del backend al iniciar.
+----------------------------------------------------------------------- */
+const Persistencia = {
+  CLAVE: 'acajutla_estado_v1',
+  CAMPOS: ['ruta','busqueda','resultados','modoResultados','vueloIda','tarifaIda','precioTarifaIda',
+           'vueloRegreso','tarifaRegreso','precioTarifaRegreso','pasajeros','segmentos','asientos',
+           'servicios','contacto','precios','reservaActual','usuario'],
+
+  guardar(){
+    try{
+      const datos = {};
+      this.CAMPOS.forEach(c=>{ datos[c] = Estado[c]; });
+      localStorage.setItem(this.CLAVE, JSON.stringify(datos));
+    }catch(e){ /* storage lleno o bloqueado: la app sigue funcionando sin persistencia */ }
+  },
+
+  restaurar(){
+    try{
+      const crudo = localStorage.getItem(this.CLAVE);
+      if(!crudo) return;
+      const datos = JSON.parse(crudo);
+      if(!datos || typeof datos !== 'object') return;
+      this.CAMPOS.forEach(c=>{
+        if(datos[c] !== undefined) Estado[c] = datos[c];
+      });
+    }catch(e){ /* estado corrupto: se arranca limpio */ }
+  }
+};
+
 function totalPasajeros(){
   return Estado.busqueda.adultos + Estado.busqueda.jovenes + Estado.busqueda.ninos + Estado.busqueda.bebes;
 }
@@ -1872,6 +1905,7 @@ const Navegacion = {
     });
     document.getElementById('navLinks').classList.remove('abierto');
     Render.pantalla(ruta);
+    if(typeof Persistencia !== 'undefined') Persistencia.guardar();
     window.scrollTo({top:0, behavior:'smooth'});
   },
 
@@ -4156,7 +4190,21 @@ async function cargarAeropuertosReales(){
 }
 
 (function init(){
-  Navegacion.ir('inicio', {silencioso:true});
+  // Restaurar lo que el usuario tenía (sesión, vuelos, asientos, etc.)
+  // y devolverlo a la pantalla donde estaba antes de recargar la página.
+  Persistencia.restaurar();
+  // Si había sesión guardada, reflejarla en el botón del menú.
+  if(Estado.usuario){
+    const btnNav = document.getElementById('btnAuthNav');
+    if(btnNav){
+      btnNav.textContent = Estado.usuario.nombre || Estado.usuario.correo || 'Mi cuenta';
+      btnNav.onclick = ()=>Navegacion.ir('perfil');
+    }
+  }
+  Navegacion.ir(Estado.ruta || 'inicio', {silencioso:true});
+  // La recarga/descarga de la página también guarda el estado actual.
+  window.addEventListener('beforeunload', ()=>Persistencia.guardar());
+  window.addEventListener('pagehide', ()=>Persistencia.guardar());
   cargarAeropuertosReales();
 
   // Si la URL contiene un token de restablecimiento (?reset_token=...), abrir el modal

@@ -631,10 +631,16 @@ a{text-decoration:none;color:inherit;}
 .envivo-cerrar:hover{color:var(--rojo);}
 .envivo-avion-icon{background:none;border:none;}
 .envivo-avion{
-  font-size:22px;color:var(--amarillo);text-shadow:0 0 3px rgba(0,40,85,.85), 0 1px 2px rgba(0,40,85,.6);
+  font-size:24px;font-weight:bold;color:#FFD500;
+  text-shadow:-1.5px -1.5px 0 #002855, 1.5px -1.5px 0 #002855, -1.5px 1.5px 0 #002855, 1.5px 1.5px 0 #002855, 0 0 6px rgba(0,40,85,.9);
   display:flex;align-items:center;justify-content:center;width:34px;height:34px;
   cursor:pointer;transform-origin:center;
 }
+.envivo-etiqueta-aeropuerto{
+  background:rgba(0,40,85,.82);color:#fff;border:none;font-size:10px;font-weight:600;
+  padding:2px 6px;border-radius:4px;box-shadow:none;
+}
+.envivo-etiqueta-aeropuerto::before{border-top-color:rgba(0,40,85,.82);}
 .leaflet-container{font-family:inherit;}
 @media(max-width:900px){
   .envivo-layout{grid-template-columns:1fr;}
@@ -3969,14 +3975,18 @@ const VuelosEnVivo = {
       iconSize: [34, 34],
       iconAnchor: [17, 17]
     });
-    const marcador = L.marker(cOrigen, {icon: icono})
+    const marcador = L.marker(cOrigen, {icon: icono, zIndexOffset: 1000})
       .addTo(this.mapa)
       .on('click', ()=>this.seleccionar(v.numero_vuelo));
-    const polyline = L.polyline([cOrigen, cDestino], {color:'#003B95', weight:1.5, opacity:0.55, dashArray:'6,6'})
+    const polyline = L.polyline([cOrigen, cDestino], {color:'#F4B400', weight:2.5, opacity:0.9, dashArray:'8,6'})
       .addTo(this.mapa)
       .on('click', ()=>this.seleccionar(v.numero_vuelo));
-    L.circleMarker(cOrigen, {radius:4, color:'#003B95', fillOpacity:1}).addTo(this.mapa).bindTooltip(`${v.origen.codigo_iata} · ${v.origen.ciudad}`);
-    L.circleMarker(cDestino, {radius:4, color:'#2E8B57', fillOpacity:1}).addTo(this.mapa).bindTooltip(`${v.destino.codigo_iata} · ${v.destino.ciudad}`);
+    L.circleMarker(cOrigen, {radius:6, color:'#ffffff', weight:2, fillColor:'#003B95', fillOpacity:1})
+      .addTo(this.mapa)
+      .bindTooltip(`${v.origen.codigo_iata} · ${v.origen.ciudad}`, {permanent:true, direction:'top', className:'envivo-etiqueta-aeropuerto'});
+    L.circleMarker(cDestino, {radius:6, color:'#ffffff', weight:2, fillColor:'#2E8B57', fillOpacity:1})
+      .addTo(this.mapa)
+      .bindTooltip(`${v.destino.codigo_iata} · ${v.destino.ciudad}`, {permanent:true, direction:'top', className:'envivo-etiqueta-aeropuerto'});
     this.vuelos[v.numero_vuelo] = {datos: v, marcador, polyline, progreso: v.progreso};
   },
 

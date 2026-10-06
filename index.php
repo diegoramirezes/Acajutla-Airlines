@@ -3838,6 +3838,7 @@ const EstadoVuelo = {
 ===================================================================== */
 const VuelosEnVivo = {
   mapa: null,
+  observadorTamano: null,
   intervaloTick: null,
   intervaloRefresco: null,
   vuelos: {},            // numero_vuelo -> {datos, marcador, polyline, progreso}
@@ -3872,12 +3873,22 @@ const VuelosEnVivo = {
       return;
     }
     this.mapa = L.map(contMapa, {zoomControl:true, attributionControl:true}).setView([14.5, -87.5], 5);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 12,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    // Vista SATÉLITE (imágenes reales: ciudades, vegetación, lagos) con
+    // capa de referencia de Esri, gratuita, estilo Google Maps satélite.
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 17,
+      attribution: 'Imágenes &copy; Esri, Maxar, Earthstar Geographics'
+    }).addTo(this.mapa);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 17,
+      opacity: 0.9
     }).addTo(this.mapa);
     // El contenedor puede tardar en asentar su tamaño dentro del SPA:
     // sin invalidateSize las teselas quedan desalineadas o fragmentadas.
+    // El ResizeObserver reajusta el mapa SIEMPRE que el contenedor cambie
+    // de tamaño (grid/fonts/carga de la página), no solo en window.resize.
+    this.observadorTamano = new ResizeObserver(()=>{ if(this.mapa) this.mapa.invalidateSize(); });
+    this.observadorTamano.observe(contMapa);
     setTimeout(()=>{ if(this.mapa) this.mapa.invalidateSize(); }, 250);
     setTimeout(()=>{ if(this.mapa) this.mapa.invalidateSize(); }, 1200);
     this.refrescar();
@@ -3888,6 +3899,7 @@ const VuelosEnVivo = {
   detener(){
     if(this.intervaloTick){ clearInterval(this.intervaloTick); this.intervaloTick = null; }
     if(this.intervaloRefresco){ clearInterval(this.intervaloRefresco); this.intervaloRefresco = null; }
+    if(this.observadorTamano){ try{ this.observadorTamano.disconnect(); }catch(e){} this.observadorTamano = null; }
     if(this.mapa){ try{ this.mapa.remove(); }catch(e){} this.mapa = null; }
     this.vuelos = {};
     this.seleccionado = null;

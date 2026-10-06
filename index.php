@@ -975,9 +975,11 @@ const Estado = {
 };
 
 /* -----------------------------------------------------------------------
-   PERSISTENCIA DEL ESTADO (localStorage)
-   Evita perder la sesión, vuelos, asientos, pasajeros y contacto al
-   recerrar la página. Se guarda en cada navegación y antes de descargar.
+   PERSISTENCIA DEL ESTADO (sessionStorage)
+   Sobrevive al botón de refrescar (F5 / flecha del navegador): la sesión,
+   vuelos, asientos, pasajeros y contacto se restauran tal como estaban.
+   Al CERRAR la pestaña o el navegador el storage se borra solo: la
+   próxima visita arranca limpia, como si fuera la primera vez.
    aeropuertosDisponibles NO se guarda: se recarga del backend al iniciar.
 ----------------------------------------------------------------------- */
 const Persistencia = {
@@ -990,13 +992,16 @@ const Persistencia = {
     try{
       const datos = {};
       this.CAMPOS.forEach(c=>{ datos[c] = Estado[c]; });
-      localStorage.setItem(this.CLAVE, JSON.stringify(datos));
+      sessionStorage.setItem(this.CLAVE, JSON.stringify(datos));
     }catch(e){ /* storage lleno o bloqueado: la app sigue funcionando sin persistencia */ }
   },
 
   restaurar(){
     try{
-      const crudo = localStorage.getItem(this.CLAVE);
+      // Limpiar residuo de la versión anterior que usaba localStorage
+      // (persistía incluso al cerrar el navegador).
+      localStorage.removeItem(this.CLAVE);
+      const crudo = sessionStorage.getItem(this.CLAVE);
       if(!crudo) return;
       const datos = JSON.parse(crudo);
       if(!datos || typeof datos !== 'object') return;

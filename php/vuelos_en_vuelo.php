@@ -74,17 +74,17 @@ if($resultado === false){
 }
 
 // Los datos en BD están en hora local El Salvador (UTC-6).
-// El servidor Aiven corre en UTC, así que strtotime() los interpreta
-// como UTC, adelantando 6 horas. Se corrige sumando 6*3600 a cada ts.
-// El reloj "ahora" también se expresa en términos de esa misma escala
-// para que el cálculo de progreso sea coherente.
-$TZ_OFFSET = 6 * 3600; // segundos de diferencia UTC → UTC-6
-$ahoraTs = time() - $TZ_OFFSET; // "ahora" en escala UTC-6
+// strtotime() en el servidor Aiven (UTC) interpreta esas horas como UTC,
+// quedando 6 h por debajo del timestamp UTC real. Sumando 6*3600 se
+// obtiene el timestamp UTC correcto; JS toLocaleTimeString('es-SV')
+// luego resta 6 h y muestra la hora local correcta.
+$TZ_OFFSET = 6 * 3600; // UTC-6 → UTC
+$ahoraTs   = time();   // tiempo real UTC del servidor
 
 $vuelos = [];
 while($fila = mysqli_fetch_assoc($resultado)){
-    $salidaTs = strtotime((string)$fila['departure_datetime']) - $TZ_OFFSET;
-    $llegadaTs = strtotime((string)$fila['arrival_datetime'])  - $TZ_OFFSET;
+    $salidaTs = strtotime((string)$fila['departure_datetime']) + $TZ_OFFSET;
+    $llegadaTs = strtotime((string)$fila['arrival_datetime'])  + $TZ_OFFSET;
     if($salidaTs === false || $llegadaTs === false || $llegadaTs <= $salidaTs) continue;
 
     $progreso = ($ahoraTs - $salidaTs) / ($llegadaTs - $salidaTs);

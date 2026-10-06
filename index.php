@@ -1149,8 +1149,14 @@ const Util = {
   },
 
   // Formatea el vencimiento como MM/AA en vivo a partir de dígitos.
+  // El mes no puede pasar de 12: si al escribir se forma un mes inválido
+  // (ej. "55"), se descarta el segundo dígito para que nunca llegue a existir.
   formatExpiry(valorCrudo){
-    const digitos = Util.sanitizeNumericInput(valorCrudo, 4);
+    let digitos = Util.sanitizeNumericInput(valorCrudo, 4);
+    while(digitos.length >= 2 && parseInt(digitos.slice(0,2),10) > 12){
+      digitos = digitos[0] + digitos.slice(2);
+    }
+    if(digitos.length === 2 && digitos[0] === '0' && digitos[1] === '0') digitos = '0';
     return digitos.length > 2 ? digitos.slice(0,2)+'/'+digitos.slice(2) : digitos;
   },
 
@@ -1466,14 +1472,13 @@ const Validar = {
   // Formato final exigido según el tipo de documento:
   // - DUI: EXACTAMENTE 8 dígitos + guion + 1 dígito (9 dígitos en total),
   //   el mismo formato oficial que ya usa el mapeo document_type=13.
-  // - PASAPORTE / CARNET_MENOR: no existe en el proyecto/BD una regla más
-  //   específica que la genérica ya establecida (alfanumérico, 5-20
-  //   caracteres) — se mantiene esa, sin inventar una nueva.
+  // - PASAPORTE / CARNET_MENOR: estrictamente letras y números (sin puntos,
+  //   guiones, espacios ni símbolos), de 5 a 20 caracteres.
   documentoValido(v, tipoDocumento){
     if(tipoDocumento === 'DUI'){
       return /^\d{8}-\d$/.test(v||'');
     }
-    return /^[A-Za-z0-9-]{5,20}$/.test(v||'');
+    return /^[A-Za-z0-9]{5,20}$/.test(v||'');
   },
   correoValido(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v||''); },
   soloTexto(v){ return /^[A-Za-zÁÉÍÓÚÑáéíóúñ\s']{2,60}$/.test(v||''); },
@@ -1496,7 +1501,7 @@ const Validar = {
     if(!Validar.soloTexto(p.apellidos)) err.apellidos='Ingresa apellidos válidos.';
     if(!Validar.requerido(p.tipoDocumento)) err.tipoDocumento='Selecciona un tipo de documento.';
     if(!Validar.documentoValido(p.numeroDocumento, p.tipoDocumento)){
-      err.numeroDocumento = p.tipoDocumento==='DUI' ? 'El DUI debe tener el formato 12345678-9.' : 'Documento inválido (5-20 caracteres).';
+      err.numeroDocumento = p.tipoDocumento==='DUI' ? 'El DUI debe tener el formato 12345678-9.' : 'Documento inválido (5-20 caracteres, solo letras y números).';
     }
     if(!Validar.requerido(p.nacionalidad)) err.nacionalidad='Ingresa la nacionalidad.';
     if(!Validar.requerido(p.fechaNacimiento)) err.fechaNacimiento='Selecciona la fecha de nacimiento.';
@@ -2185,9 +2190,9 @@ const Vistas = {
               <label>Tipo de documento *</label>
               <select data-p="${i}" data-f="tipoDocumento" onchange="Pasajeros.onTipoDocumentoChange(this)">
                 <option value="">Seleccionar</option>
-                <option value="DUI" ${p.tipoDocumento==='DUI'?'selected':''}>DUI</option>
+                ${cat.type==='adult' ? `<option value="DUI" ${p.tipoDocumento==='DUI'?'selected':''}>DUI</option>` : ''}
                 <option value="PASAPORTE" ${p.tipoDocumento==='PASAPORTE'?'selected':''}>Pasaporte</option>
-                <option value="CARNET_MENOR" ${p.tipoDocumento==='CARNET_MENOR'?'selected':''}>Carnet de menor</option>
+                ${cat.type!=='adult' ? `<option value="CARNET_MENOR" ${p.tipoDocumento==='CARNET_MENOR'?'selected':''}>Carnet de menor</option>` : ''}
               </select>
             </div>
             <div class="campo-form"><label>Número de documento *</label><input type="text" maxlength="20" data-p="${i}" data-f="numeroDocumento" value="${Util.escapeHtml(p.numeroDocumento||'')}" oninput="Pasajeros.formatearDocumento(this)"></div>
@@ -3131,10 +3136,8 @@ const Pasajeros = {
   // verificador) — formato oficial del DUI de El Salvador, el mismo que ya
   // usa el proyecto como ejemplo (MOCK.clientes: '01234567-8'). El usuario
   // solo escribe/pega números; el guion se inserta automáticamente.
-  // PASAPORTE / CARNET_MENOR: no existe en el proyecto una máscara o
-  // longitud específica confirmada distinta de la validación genérica ya
-  // existente (Validar.documentoValido: alfanumérico, 5-20 caracteres), así
-  // que NO se inventa una máscara para esos dos tipos — se deja tal cual.
+  // PASAPORTE / CARNET_MENOR: solo letras y números (sin puntos, guiones,
+  // espacios ni emojis), máximo 20 caracteres — se filtra en vivo.
   formatearDocumento(input){
     const contenedor = input.closest('.pasajero-form');
     const selectTipo = contenedor ? contenedor.querySelector('select[data-f="tipoDocumento"]') : null;
@@ -3143,6 +3146,8 @@ const Pasajeros = {
       let digitos = input.value.replace(/\D/g,'').slice(0,9);
       if(digitos.length > 8) digitos = digitos.slice(0,8) + '-' + digitos.slice(8);
       input.value = digitos;
+    } else {
+      input.value = input.value.replace(/[^A-Za-z0-9]/g,'').slice(0,20);
     }
   },
 
@@ -3435,7 +3440,18 @@ const Pago = {
     const errores = [];
     if(!nombre) errores.push('Ingresa el nombre del titular.');
     if(!/^\d{13,19}$/.test(numero)) errores.push('Número de tarjeta inválido.');
-    if(!/^(0[1-9]|1[0-2])\/\d{2}$/.test(venc)) errores.push('Vencimiento inválido (MM/AA).');
+    const mVenc = /^(0[1-9]|1[0-2])\/(\d{2})$/.exec(venc);
+    if(!mVenc){
+      errores.push('Vencimiento inválido (MM/AA, mes 01-12).');
+    } else {
+      // Ni vencida ni a más de 12 meses hacia adelante (mes incluido).
+      const fechaVenc = new Date(2000 + parseInt(mVenc[2],10), parseInt(mVenc[1],10) - 1, 1);
+      const hoy = new Date();
+      const mesActual = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+      const limite12Meses = new Date(hoy.getFullYear(), hoy.getMonth() + 12, 1);
+      if(fechaVenc < mesActual) errores.push('La tarjeta está vencida.');
+      else if(fechaVenc > limite12Meses) errores.push('El vencimiento no puede ser mayor a 12 meses.');
+    }
     if(!/^\d{3,4}$/.test(cvv)) errores.push('CVV inválido.');
     return {errores, detalle:{tarjeta_terminacion: numero.slice(-4)}};
   },

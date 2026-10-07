@@ -165,7 +165,7 @@ try{
     sort($flightIdsOrdenados, SORT_NUMERIC);
 
     $stmtLockVuelo = mysqli_prepare($conexion,
-        "SELECT id, departure_datetime, (departure_datetime > NOW()) AS aun_disponible
+        "SELECT id, departure_datetime, (departure_datetime > CONVERT_TZ(NOW(), '+00:00', '-06:00')) AS aun_disponible
          FROM flights WHERE id = ? FOR UPDATE"
     );
     if(!$stmtLockVuelo){

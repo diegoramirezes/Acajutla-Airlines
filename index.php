@@ -1071,7 +1071,9 @@ const Util = {
   formatoFechaLarga(fechaStr){
     if(!fechaStr) return '';
     const meses=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
-    const [y,m,d]=fechaStr.split('-').map(Number);
+    // Acepta "YYYY-MM-DD" y también timestamps MySQL "YYYY-MM-DD HH:MM:SS":
+    // se toma solo la parte de fecha para que el día no salga como NaN.
+    const [y,m,d]=String(fechaStr).slice(0,10).split('-').map(Number);
     return `${d} ${meses[m-1]} ${y}`;
   },
 

@@ -1158,6 +1158,9 @@ const Util = {
   // (ej. "55"), se descarta el segundo dígito para que nunca llegue a existir.
   formatExpiry(valorCrudo){
     let digitos = Util.sanitizeNumericInput(valorCrudo, 4);
+    if(digitos.length >= 2 && /^[2-9]/.test(digitos) && parseInt(digitos.slice(0,2),10) > 12){
+      digitos = '0' + digitos[0] + digitos.slice(1);
+    }
     while(digitos.length >= 2 && parseInt(digitos.slice(0,2),10) > 12){
       digitos = digitos[0] + digitos.slice(2);
     }
@@ -2200,7 +2203,7 @@ const Vistas = {
                 ${cat.type!=='adult' ? `<option value="CARNET_MENOR" ${p.tipoDocumento==='CARNET_MENOR'?'selected':''}>Carnet de menor</option>` : ''}
               </select>
             </div>
-            <div class="campo-form"><label>Número de documento *</label><input type="text" maxlength="20" data-p="${i}" data-f="numeroDocumento" value="${Util.escapeHtml(p.numeroDocumento||'')}" oninput="Pasajeros.formatearDocumento(this)"></div>
+            <div class="campo-form"><label>Número de documento *</label><input type="text" maxlength="20" data-p="${i}" data-f="numeroDocumento" value="${Util.escapeHtml(p.numeroDocumento||'')}" oninput="Pasajeros.formatearDocumento(this); Pasajeros.limpiarErrorDocumento(this)" onblur="Pasajeros.validarDocumentosDuplicados()" aria-describedby="msgDocumento_${i}"><small class="msg-error" id="msgDocumento_${i}"></small></div>
             <div class="campo-form" style="position:relative">
               <label>Nacionalidad *</label>
               <input type="text" id="nacionalidadInput_${i}" autocomplete="off"
@@ -2479,7 +2482,7 @@ const Vistas = {
         </div>
         <div class="campo-form">
           <label>Vencimiento (MM/AA) *</label>
-          <input type="text" id="pagoVencimiento" inputmode="numeric" maxlength="5" placeholder="MM/AA" oninput="Pago.formatearVencimiento(this)">
+          <input type="text" id="pagoVencimiento" inputmode="numeric" maxlength="5" placeholder="MM/AA" oninput="Pago.formatearVencimiento(this)" onkeydown="Pago.moverAlAnioVencimiento(event, this)">
         </div>
         <div class="campo-form">
           <label>CVV *</label>
@@ -3134,6 +3137,7 @@ const Pasajeros = {
     if(inputDoc){
       inputDoc.value = '';
       this.formatearDocumento(inputDoc);
+      this.limpiarErrorDocumento(inputDoc);
     }
   },
 
@@ -3154,6 +3158,32 @@ const Pasajeros = {
     } else {
       input.value = input.value.replace(/[^A-Za-z0-9]/g,'').slice(0,20);
     }
+  },
+
+  limpiarErrorDocumento(input){
+    const mensaje = document.getElementById(`msgDocumento_${input.dataset.p}`);
+    if(mensaje) mensaje.textContent = '';
+  },
+
+  validarDocumentosDuplicados(){
+    const vistos = {};
+    document.querySelectorAll('#formPasajeros input[data-f="numeroDocumento"]').forEach(input=>{
+      const mensaje = document.getElementById(`msgDocumento_${input.dataset.p}`);
+      if(mensaje) mensaje.textContent = '';
+      const documento = input.value.trim().toUpperCase();
+      if(!documento) return;
+      if(vistos[documento]){
+        const pasajeroActual = Number(input.dataset.p) + 1;
+        const pasajeroAnterior = Number(vistos[documento].dataset.p) + 1;
+        const texto = `Este documento ya fue ingresado para el pasajero ${pasajeroAnterior}.`;
+        const mensajeActual = document.getElementById(`msgDocumento_${input.dataset.p}`);
+        const mensajeAnterior = document.getElementById(`msgDocumento_${vistos[documento].dataset.p}`);
+        if(mensajeActual) mensajeActual.textContent = texto;
+        if(mensajeAnterior) mensajeAnterior.textContent = `Este documento está repetido con el pasajero ${pasajeroActual}.`;
+      } else {
+        vistos[documento] = input;
+      }
+    });
   },
 
   formatearTelefono(input){
@@ -3448,6 +3478,19 @@ const Pago = {
 
   formatearNumeroTarjeta(input){ input.value = Util.formatCardNumber(input.value); },
   formatearVencimiento(input){ input.value = Util.formatExpiry(input.value); },
+  moverAlAnioVencimiento(event, input){
+    if(event.key !== 'ArrowRight') return;
+    const digitos = input.value.replace(/\D/g,'');
+    if(digitos.length === 1 && digitos !== '0'){
+      event.preventDefault();
+      input.value = '0' + digitos + '/';
+      input.setSelectionRange(3, 3);
+    } else if(digitos.length === 2 && /^(0[1-9]|1[0-2])$/.test(digitos)){
+      event.preventDefault();
+      input.value = digitos + '/';
+      input.setSelectionRange(3, 3);
+    }
+  },
   formatearCvv(input){ input.value = Util.sanitizeNumericInput(input.value, 4); },
 
   validarTarjeta(){

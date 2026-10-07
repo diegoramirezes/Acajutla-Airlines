@@ -369,8 +369,9 @@ try{
         throw new Exception('No se pudo preparar la validación de nacionalidad: ' . mysqli_error($conexion));
     }
     $paisesValidados = []; // caché en memoria: code => true, para no repetir la consulta si varios pasajeros comparten nacionalidad
+    $documentosVistos = []; // número de documento normalizado => índice del pasajero, para rechazar documentos repetidos dentro de la misma reserva
 
-    foreach($pasajeros as $p){
+    foreach($pasajeros as $idxPax => $p){
         $nombres = isset($p['nombres']) ? substr((string)$p['nombres'], 0, 100) : '';
         $apellidos = isset($p['apellidos']) ? substr((string)$p['apellidos'], 0, 100) : '';
         $documento = isset($p['documento']) ? substr((string)$p['documento'], 0, 30) : '';
@@ -396,6 +397,17 @@ try{
         if(!$formatoValido){
             throw new Exception('Formato de documento inválido para ' . $tipoDocumentoFrontend . ': ' . $documento);
         }
+
+        // Documentos duplicados: dentro de una misma reserva cada pasajero
+        // debe tener su propio número de documento (DUI, pasaporte o carné
+        // de menor). Se normaliza (trim + mayúsculas) con el mismo criterio
+        // que la validación del frontend en Pasajeros.continuar(), de modo
+        // que no se pueda repetir ni siquiera variando mayúsculas/espacios.
+        $documentoNormalizado = strtoupper(trim($documento));
+        if(isset($documentosVistos[$documentoNormalizado])){
+            throw new Exception('El documento ' . $documento . ' está repetido: los pasajeros ' . ($documentosVistos[$documentoNormalizado] + 1) . ' y ' . ($idxPax + 1) . ' no pueden usar el mismo número. Cada pasajero debe tener su propio documento.');
+        }
+        $documentosVistos[$documentoNormalizado] = $idxPax;
 
         // Nacionalidad: passengers.nationality guarda el código real de
         // countries.code. Nunca se confía solo en lo que envía el frontend

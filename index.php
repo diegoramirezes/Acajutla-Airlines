@@ -3185,6 +3185,19 @@ const Pasajeros = {
         mensajes.push(`Pasajero ${i+1}: la fecha de nacimiento no corresponde a la categoría seleccionada.`);
       }
     });
+    // Documentos duplicados: dos pasajeros de la misma reserva no pueden
+    // usar el mismo número de documento (DUI, pasaporte o carné de menor).
+    const docsVistos = {};
+    Estado.pasajeros.forEach((p,i)=>{
+      const doc = (p.numeroDocumento||'').trim().toUpperCase();
+      if(!doc) return;
+      if(docsVistos[doc] !== undefined){
+        huboError = true;
+        mensajes.push(`Pasajeros ${docsVistos[doc]+1} y ${i+1}: el documento ${p.numeroDocumento} está repetido. Cada pasajero debe tener su propio documento.`);
+      } else {
+        docsVistos[doc] = i;
+      }
+    });
     const cont = document.getElementById('alertaPasajeros');
     if(huboError){
       cont.innerHTML = `<div class="alerta alerta-error">⚠ ${mensajes.join('<br>')}</div>`;

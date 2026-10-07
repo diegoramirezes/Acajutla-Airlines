@@ -188,7 +188,7 @@ a{text-decoration:none;color:inherit;}
 .pasajeros-panel-body{
   padding:0 16px;overflow-y:auto;flex:1 1 auto;min-height:0;
 }
-.pasajeros-panel-footer{margin:10px 16px 16px;flex-shrink:0;}
+.pasajeros-panel-footer{width:calc(100% - 32px);margin:10px 16px 16px;flex-shrink:0;}
 .pasajeros-cerrar{font-size:1.1rem;color:#889;line-height:1;padding:2px 6px;border-radius:6px;}
 .pasajeros-cerrar:hover{background:var(--gris-claro);color:var(--gris-oscuro);}
 .pasajeros-fila{display:flex;justify-content:space-between;align-items:center;padding:8px 0;color:var(--gris-oscuro);}
@@ -763,6 +763,7 @@ const API_CONFIG = {
     return ruta;
   },
   get ENDPOINT_AEROPUERTOS(){ return this.rutaBaseApp() + 'php/aeropuertos.php'; },
+  get ENDPOINT_METRICAS_INICIO(){ return this.rutaBaseApp() + 'php/metricas_inicio.php'; },
   get ENDPOINT_BUSCAR_VUELOS(){ return this.rutaBaseApp() + 'php/buscar_vuelos.php'; },
   // Endpoint LOCAL real (php/enviar_comprobante.php) para el envío del
   // comprobante por correo. Es independiente de USE_MOCKS: solo esta
@@ -931,6 +932,7 @@ const Estado = {
   // Se inicializa con el respaldo mock y se sustituye por los datos reales
   // de Aiven (vía api.php) tan pronto la carga inicial responde con éxito.
   aeropuertosDisponibles: MOCK.aeropuertos,
+  metricasInicio: null,
 
   busqueda: {
     tipoViaje: 'IDA_VUELTA',   // IDA_VUELTA | SOLO_IDA
@@ -1577,6 +1579,13 @@ const Api = {
     }
   },
 
+  async obtenerMetricasInicio(){
+    const response = await fetch(API_CONFIG.ENDPOINT_METRICAS_INICIO);
+    const json = await response.json();
+    if(!json.ok) throw new Error(json.error || 'No se pudieron cargar las métricas.');
+    return json.data;
+  },
+
   // -----------------------------------------------------------------------
   // ETAPA DE CONEXIÓN REAL — búsqueda de vuelos.
   // Al igual que obtenerAeropuertos(), esta función ignora USE_MOCKS e
@@ -2074,9 +2083,9 @@ const Vistas = {
           </div>
         </div>
         <div class="hero-stats">
-          <div><b>10</b><span>Destinos</span></div>
-          <div><b>20+</b><span>Vuelos diarios</span></div>
-          <div><b>4</b><span>Tipos de aeronave</span></div>
+          <div><b>${Estado.metricasInicio ? Estado.metricasInicio.destinos : '—'}</b><span>Destinos</span></div>
+          <div><b>${Estado.metricasInicio ? Estado.metricasInicio.vuelos_diarios : '—'}</b><span>Vuelos diarios</span></div>
+          <div><b>${Estado.metricasInicio ? Estado.metricasInicio.tipos_aeronave : '—'}</b><span>Tipos de aeronave</span></div>
         </div>
       </div>
     </section>
@@ -4266,6 +4275,15 @@ async function cargarAeropuertosReales(){
   if(Estado.ruta === 'inicio') Navegacion.ir('inicio', {silencioso:true});
 }
 
+async function cargarMetricasInicio(){
+  try{
+    Estado.metricasInicio = await Api.obtenerMetricasInicio();
+    if(Estado.ruta === 'inicio') Navegacion.ir('inicio', {silencioso:true});
+  }catch(e){
+    console.error('obtenerMetricasInicio() falló al consultar', API_CONFIG.ENDPOINT_METRICAS_INICIO, e);
+  }
+}
+
 (function init(){
   // Restaurar lo que el usuario tenía (sesión, vuelos, asientos, etc.)
   // y devolverlo a la pantalla donde estaba antes de recargar la página.
@@ -4283,6 +4301,7 @@ async function cargarAeropuertosReales(){
   window.addEventListener('beforeunload', ()=>Persistencia.guardar());
   window.addEventListener('pagehide', ()=>Persistencia.guardar());
   cargarAeropuertosReales();
+  cargarMetricasInicio();
 
   // Si la URL contiene un token de restablecimiento (?reset_token=...), abrir el modal
   const urlParams = new URLSearchParams(window.location.search);

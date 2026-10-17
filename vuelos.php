@@ -328,9 +328,9 @@ const ResultadosVuelos = {
     if(!cont) return;
     let vuelos = [...this.vuelosCrudos];
 
-    const precioMax = parseInt(document.getElementById('filtroPrecio')?.value || 900);
+    const precioMax = parseInt(document.getElementById('filtroPrecio')?.value || 10000);
     const labelPrecio = document.getElementById('valorFiltroPrecio');
-    if(labelPrecio) labelPrecio.textContent = '$'+precioMax;
+    if(labelPrecio) labelPrecio.textContent = '$'+Util.formatoNumero(precioMax);
     // El precio para filtrar/ordenar sale de la tarifa ECONOMICA real (vuelo.tarifas);
     // si un vuelo aún no tiene precio disponible, no se excluye por este filtro.
     vuelos = vuelos.filter(v=>{
@@ -428,8 +428,8 @@ Object.assign(Vistas, {
         <aside class="filtros card">
           <div class="filtro-grupo">
             <h4>Precio máximo</h4>
-            <input type="range" class="rango-precio" id="filtroPrecio" min="100" max="900" value="900" oninput="ResultadosVuelos.aplicarFiltros()">
-            <div style="display:flex;justify-content:space-between;font-size:.75rem;color:#889"><span>$100</span><span id="valorFiltroPrecio">$900</span></div>
+            <input type="range" class="rango-precio" id="filtroPrecio" min="100" max="10000" step="50" value="10000" oninput="ResultadosVuelos.aplicarFiltros()">
+            <div style="display:flex;justify-content:space-between;font-size:.75rem;color:#889"><span>$100</span><span id="valorFiltroPrecio">$10,000</span></div>
           </div>
           <div class="filtro-grupo">
             <h4>Escalas</h4>

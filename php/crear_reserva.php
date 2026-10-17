@@ -326,14 +326,17 @@ try{
         }
     }
 
+    // Se inicializa paid_total en 0.00 antes de insertar en payments para evitar
+    // que el trigger de la BD sume dos veces el monto (2x). Al final de la
+    // transacción se garantiza que paid_total quede exactamente en $montoPago.
     $stmtRes = mysqli_prepare($conexion,
         "INSERT INTO reservations (pnr, customer_id, status, estimated_total, paid_total, currency, created_at, payment_date, sales_channel)
-         VALUES (?, ?, 'paid', ?, ?, 'USD', NOW(), NOW(), 'web')"
+         VALUES (?, ?, 'paid', ?, 0.00, 'USD', NOW(), NOW(), 'web')"
     );
     if(!$stmtRes){
         throw new Exception('No se pudo preparar la inserción de la reserva: ' . mysqli_error($conexion));
     }
-    mysqli_stmt_bind_param($stmtRes, 'sidd', $pnr, $clienteId, $total, $total);
+    mysqli_stmt_bind_param($stmtRes, 'sid', $pnr, $clienteId, $total);
     if(!mysqli_stmt_execute($stmtRes)){
         throw new Exception('No se pudo insertar la reserva: ' . mysqli_stmt_error($stmtRes));
     }
@@ -541,6 +544,17 @@ try{
         }
     }
     mysqli_stmt_close($stmtSeg);
+
+    // 2.8 Asegurar que estimated_total y paid_total queden con el monto real exacto
+    //     sin duplicaciones por triggers de base de datos.
+    $stmtFixTotal = mysqli_prepare($conexion,
+        "UPDATE reservations SET estimated_total = ?, paid_total = ?, status = 'paid' WHERE id = ?"
+    );
+    if($stmtFixTotal){
+        mysqli_stmt_bind_param($stmtFixTotal, 'ddi', $total, $montoPago, $reservationId);
+        mysqli_stmt_execute($stmtFixTotal);
+        mysqli_stmt_close($stmtFixTotal);
+    }
 
     mysqli_commit($conexion);
 

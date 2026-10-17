@@ -112,9 +112,24 @@ if($emailCliente !== '' && $customerIdInt){
     }
 }
 
+// 1.5. Auto-corregir reservas previas donde el trigger de payments duplicó paid_total (2x)
+@mysqli_query($conexion,
+    "UPDATE reservations r
+     INNER JOIN (
+         SELECT reservation_id, SUM(amount) AS monto_real
+         FROM payments
+         WHERE type = 'payment' AND status = 'approved'
+         GROUP BY reservation_id
+     ) p ON p.reservation_id = r.id
+     SET r.paid_total = p.monto_real
+     WHERE ABS(r.paid_total - (p.monto_real * 2)) < 0.05"
+);
+
 // 2. Consulta principal: listar reservas por customer_id
-// O aquellas cuyo PNR esté en email_outbox enviado a su correo
-$sql = "SELECT DISTINCT r.pnr, r.status, r.estimated_total, r.paid_total, r.created_at
+// O aquellas cuyo PNR esté en email_outbox enviado a su correo.
+// Se obtiene el monto del pago principal en payments (misma fuente que consultar_reserva.php).
+$sql = "SELECT DISTINCT r.id, r.pnr, r.status, r.estimated_total, r.paid_total, r.created_at,
+               (SELECT p.amount FROM payments p WHERE p.reservation_id = r.id AND p.type = 'payment' ORDER BY p.id DESC LIMIT 1) AS pago_monto
         FROM reservations r
         LEFT JOIN email_outbox e ON e.ref_type = 'reservation' AND e.ref_id COLLATE utf8mb4_unicode_ci = r.pnr COLLATE utf8mb4_unicode_ci
         WHERE ( ? IS NOT NULL AND r.customer_id = ? )
@@ -143,7 +158,13 @@ if($resultado === false){
 $reservas = [];
 while($fila = mysqli_fetch_assoc($resultado)){
     $estadoReal = strtolower((string)$fila['status']);
-    $total = $fila['paid_total'] !== null ? (float)$fila['paid_total'] : (float)$fila['estimated_total'];
+    if($fila['pago_monto'] !== null){
+        $total = (float)$fila['pago_monto'];
+    } elseif($fila['estimated_total'] !== null && (float)$fila['estimated_total'] > 0){
+        $total = (float)$fila['estimated_total'];
+    } else {
+        $total = (float)$fila['paid_total'];
+    }
     $reservas[] = [
         'pnr' => $fila['pnr'],
         'creado_en' => $fila['created_at'],

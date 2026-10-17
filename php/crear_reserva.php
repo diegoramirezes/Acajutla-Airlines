@@ -236,6 +236,69 @@ try{
         }
     }
 
+    // 2.3-B Verificar cupos tarifarios (seats_allocated vs seats_sold) y reservar
+    $mapaClaseCodigo = ['economy' => 'ECONOMICA', 'premium' => 'PREMIUM', 'business' => 'BUSINESS', 'first' => 'PRIMERA'];
+    $cuposRequeridos = [];
+    
+    foreach($segmentos as $seg) {
+        $flightId = (int)$seg['flight_id'];
+        $fareClassFront = (string)$seg['fare_class'];
+        $codigoFare = $mapaClaseCodigo[$fareClassFront] ?? 'ECONOMICA';
+        
+        $key = "$flightId-$codigoFare";
+        if(!isset($cuposRequeridos[$key])) $cuposRequeridos[$key] = 0;
+        
+        $pasajerosConAsiento = 0;
+        foreach($seg['asientos'] as $seat) {
+            // Un pasajero necesita cupo en la tarifa si ocupa un asiento físico
+            // (esto ignora a los bebés en brazos que viajan con tarifa reducida o gratis y no tienen asiento).
+            if($seat !== null) {
+                $pasajerosConAsiento++;
+            }
+        }
+        $cuposRequeridos[$key] += $pasajerosConAsiento;
+    }
+
+    $stmtCheckFares = mysqli_prepare($conexion, 
+        "SELECT ff.id, ff.seats_allocated, ff.seats_sold 
+         FROM flight_fares ff 
+         JOIN fare_classes fc ON ff.fare_class_id = fc.id 
+         WHERE ff.flight_id = ? AND fc.code = ? FOR UPDATE"
+    );
+    if(!$stmtCheckFares){
+        throw new Exception('No se pudo preparar la verificación de cupos tarifarios.');
+    }
+    
+    $stmtUpdateFares = mysqli_prepare($conexion,
+        "UPDATE flight_fares SET seats_sold = seats_sold + ? WHERE id = ?"
+    );
+
+    foreach($cuposRequeridos as $key => $cantidad){
+        if($cantidad <= 0) continue;
+        list($flightId, $codigoFare) = explode('-', $key);
+        
+        mysqli_stmt_bind_param($stmtCheckFares, 'is', $flightId, $codigoFare);
+        if(!mysqli_stmt_execute($stmtCheckFares)){
+            throw new Exception('Error al verificar tarifas: ' . mysqli_stmt_error($stmtCheckFares));
+        }
+        $resFares = mysqli_stmt_get_result($stmtCheckFares);
+        $filaFare = $resFares ? mysqli_fetch_assoc($resFares) : null;
+        if($resFares) mysqli_free_result($resFares);
+        
+        if($filaFare){
+            $disponibles = $filaFare['seats_allocated'] - $filaFare['seats_sold'];
+            if($cantidad > $disponibles){
+                throw new Exception('FARE_SOLD_OUT:' . $codigoFare);
+            }
+            mysqli_stmt_bind_param($stmtUpdateFares, 'ii', $cantidad, $filaFare['id']);
+            if(!mysqli_stmt_execute($stmtUpdateFares)){
+                throw new Exception('Error al actualizar cupo tarifario: ' . mysqli_stmt_error($stmtUpdateFares));
+            }
+        }
+    }
+    mysqli_stmt_close($stmtCheckFares);
+    if($stmtUpdateFares) mysqli_stmt_close($stmtUpdateFares);
+
     // 2.4 Generar PNR único.
     $pnr = generarPnr($conexion);
     if($pnr === null){
@@ -481,6 +544,44 @@ try{
 
     mysqli_commit($conexion);
 
+    // =======================================================================
+    // LLAMADA AL SISTEMA BASE (NODE.JS) PARA FACTURACIÓN DTE
+    // =======================================================================
+    // Aquí preparamos la integración con el backend de tu compañero.
+    // Reemplazar la URL cuando el endpoint de Node.js esté listo.
+    $nodeApiUrl = "http://localhost:3000/api/dte/generate"; // URL de ejemplo
+    
+    $payloadDte = [
+        "reservation_id" => $reservationId,
+        "pnr" => $pnr,
+        "customer_email" => $contactoEmail,
+        "total" => $total
+    ];
+
+    $ch = curl_init($nodeApiUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payloadDte));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Accept: application/json'
+    ]);
+    // Timeout corto para no bloquear la respuesta al usuario si el servidor Node está caído
+    curl_setopt($ch, CURLOPT_TIMEOUT, 5); 
+
+    $resDte = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if($httpCode >= 200 && $httpCode < 300) {
+        error_log("[Acajutla Airlines] Facturación DTE iniciada correctamente para PNR $pnr.");
+    } else {
+        // Solo registramos el error para no arruinar la experiencia del usuario, 
+        // ya que la reserva sí se completó con éxito en la BD.
+        error_log("[Acajutla Airlines] Advertencia: No se pudo generar DTE para PNR $pnr. HTTP Code: $httpCode. Respuesta: $resDte");
+    }
+    // =======================================================================
+
     cerrarConexion();
     http_response_code(200);
     echo json_encode(['ok' => true, 'data' => ['pnr' => $pnr, 'reservation_id' => $reservationId]], JSON_UNESCAPED_UNICODE);
@@ -498,6 +599,11 @@ try{
         $flightIdSalido = substr($msg, strlen('VUELO_YA_SALIO:'));
         error_log('[Acajutla Airlines] Intento de reservar un vuelo cuya salida ya pasó: flight_id=' . $flightIdSalido);
         responderError('Uno de los vuelos seleccionados ya no está disponible porque su salida ya pasó. Busca un vuelo nuevo.', 409);
+    }
+    if(strpos($msg, 'FARE_SOLD_OUT:') === 0){
+        $tarifaAgotada = substr($msg, strlen('FARE_SOLD_OUT:'));
+        error_log('[Acajutla Airlines] Intento de reservar tarifa agotada: ' . $tarifaAgotada);
+        responderError('La clase tarifaria (' . $tarifaAgotada . ') ya no tiene cupos disponibles para el número de pasajeros seleccionado.', 409);
     }
     error_log('[Acajutla Airlines] Error al crear reserva: ' . $msg);
     responderError('No se pudo completar la reserva. Intenta nuevamente.', 500);

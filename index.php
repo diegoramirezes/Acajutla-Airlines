@@ -977,11 +977,10 @@ const Estado = {
 };
 
 /* -----------------------------------------------------------------------
-   PERSISTENCIA DEL ESTADO (sessionStorage)
-   Sobrevive al botón de refrescar (F5 / flecha del navegador): la sesión,
-   vuelos, asientos, pasajeros y contacto se restauran tal como estaban.
-   Al CERRAR la pestaña o el navegador el storage se borra solo: la
-   próxima visita arranca limpia, como si fuera la primera vez.
+   PERSISTENCIA DEL ESTADO (localStorage)
+   Sobrevive al botón de refrescar (F5 / flecha del navegador) y al reiniciar
+   el navegador: la sesión, vuelos, asientos, pasajeros y contacto se restauran
+   tal como estaban.
    aeropuertosDisponibles NO se guarda: se recarga del backend al iniciar.
 ----------------------------------------------------------------------- */
 const Persistencia = {
@@ -994,16 +993,15 @@ const Persistencia = {
     try{
       const datos = {};
       this.CAMPOS.forEach(c=>{ datos[c] = Estado[c]; });
-      sessionStorage.setItem(this.CLAVE, JSON.stringify(datos));
+      localStorage.setItem(this.CLAVE, JSON.stringify(datos));
     }catch(e){ /* storage lleno o bloqueado: la app sigue funcionando sin persistencia */ }
   },
 
   restaurar(){
     try{
-      // Limpiar residuo de la versión anterior que usaba localStorage
-      // (persistía incluso al cerrar el navegador).
-      localStorage.removeItem(this.CLAVE);
-      const crudo = sessionStorage.getItem(this.CLAVE);
+      // Limpiar residuo de la versión anterior que usaba sessionStorage
+      sessionStorage.removeItem(this.CLAVE);
+      const crudo = localStorage.getItem(this.CLAVE);
       if(!crudo) return;
       const datos = JSON.parse(crudo);
       if(!datos || typeof datos !== 'object') return;
@@ -1296,10 +1294,35 @@ const Util = {
   },
 
   // Filtra en tiempo real solo los caracteres que Validar.soloTexto ya
-  // acepta (letras con tildes/ñ, espacios, apóstrofe) — mismo criterio que
-  // la validación real antes de enviar, no uno nuevo inventado aquí.
+  // acepta (letras con tildes/ñ, espacios, apóstrofe) y capitaliza la
+  // primera letra de cada palabra automáticamente.
   filtrarSoloTexto(input){
-    input.value = input.value.replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ\s']/g, '');
+    const pos = input.selectionStart;
+    const limpio = input.value
+      .replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ\s']/g, '')
+      .replace(/(^|\s)([a-záéíóúñ])/g, (m, esp, letra) => esp + letra.toUpperCase());
+    if(input.value !== limpio){
+      const diff = input.value.length - limpio.length;
+      input.value = limpio;
+      if(typeof pos === 'number'){
+        const nuevaPos = Math.max(0, pos - diff);
+        try{ input.setSelectionRange(nuevaPos, nuevaPos); }catch(e){}
+      }
+    }
+  },
+
+  // Asegura que cuando un campo de texto comience con letras, la primera
+  // letra sea siempre mayúscula sin perder la posición del cursor.
+  capitalizarPrimeraLetra(input){
+    if(!input || typeof input.value !== 'string' || !input.value) return;
+    const pos = input.selectionStart;
+    const nuevo = input.value.replace(/^(\s*)([a-záéíóúñ])/, (m, esp, letra) => esp + letra.toUpperCase());
+    if(input.value !== nuevo){
+      input.value = nuevo;
+      if(typeof pos === 'number'){
+        try{ input.setSelectionRange(pos, pos); }catch(e){}
+      }
+    }
   },
 
   // Auto-formatea el campo de teléfono salvadoreño: XXXX-XXXX (solo dígitos, máx 8)
@@ -2486,7 +2509,7 @@ const Vistas = {
     if(metodo==='TARJETA'){
       return `
       <div class="form-grid">
-        <div class="campo-form full"><label>Nombre en la tarjeta *</label><input type="text" id="pagoNombre" placeholder="Como aparece en la tarjeta"></div>
+        <div class="campo-form full"><label>Nombre en la tarjeta *</label><input type="text" id="pagoNombre" placeholder="Como aparece en la tarjeta" oninput="Util.filtrarSoloTexto(this)"></div>
         <div class="campo-form full">
           <label>Número de tarjeta *</label>
           <input type="text" id="pagoNumero" inputmode="numeric" maxlength="23" placeholder="•••• •••• •••• ••••" oninput="Pago.formatearNumeroTarjeta(this)">
@@ -2672,8 +2695,8 @@ const Vistas = {
         </div>
         <div class="card">
           <div id="alertaRegistro"></div>
-          <div class="campo-form" style="margin-bottom:12px"><label>Nombre</label><input type="text" id="regNombre" onkeydown="Util.handleEnter(event,'regApellido')"></div>
-          <div class="campo-form" style="margin-bottom:12px"><label>Apellido</label><input type="text" id="regApellido" onkeydown="Util.handleEnter(event,'regCorreo')"></div>
+          <div class="campo-form" style="margin-bottom:12px"><label>Nombre</label><input type="text" id="regNombre" oninput="Util.filtrarSoloTexto(this)" onkeydown="Util.handleEnter(event,'regApellido')"></div>
+          <div class="campo-form" style="margin-bottom:12px"><label>Apellido</label><input type="text" id="regApellido" oninput="Util.filtrarSoloTexto(this)" onkeydown="Util.handleEnter(event,'regCorreo')"></div>
           <div class="campo-form" style="margin-bottom:12px"><label>Correo</label><input type="email" id="regCorreo" onkeydown="Util.handleEnter(event,'regTelefono')"></div>
           <div class="campo-form" style="margin-bottom:12px"><label>Teléfono</label><input type="tel" id="regTelefono" placeholder="XXXX-XXXX" maxlength="9" oninput="Util.formatearTelefono(this)" onkeydown="Util.handleEnter(event,'regDocumento')"></div>
           <div class="campo-form" style="margin-bottom:12px"><label>Documento (DUI)</label><input type="text" id="regDocumento" placeholder="00000000-0" maxlength="10" oninput="Util.formatearDUI(this)" onkeydown="Util.handleEnter(event,'regPassword')"></div>
@@ -4304,6 +4327,16 @@ async function cargarMetricasInicio(){
   window.addEventListener('pagehide', ()=>Persistencia.guardar());
   cargarAeropuertosReales();
   cargarMetricasInicio();
+
+  // Capitalizar automáticamente la primera letra en campos de texto/letras
+  document.addEventListener('input', (e)=>{
+    const el = e.target;
+    if(!el) return;
+    const esTextInput = el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && (!el.type || el.type === 'text'));
+    if(!esTextInput) return;
+    if(el.inputMode === 'numeric' || el.id === 'inputRef') return;
+    Util.capitalizarPrimeraLetra(el);
+  }, true);
 
   // Si la URL contiene un token de restablecimiento (?reset_token=...), abrir el modal
   const urlParams = new URLSearchParams(window.location.search);

@@ -103,9 +103,10 @@ if($yaExiste){
 
 mysqli_begin_transaction($conexion);
 try{
+    // document_type por defecto es '13' (DUI según catálogo CAT-022 de El Salvador)
     $stmtCust = mysqli_prepare($conexion,
-        "INSERT INTO customers (first_names, last_names, document_number, email, phone, registration_date, status)
-         VALUES (?, ?, ?, ?, ?, NOW(), 'active')"
+        "INSERT INTO customers (first_names, last_names, document_type, document_number, email, phone, registration_date, status)
+         VALUES (?, ?, '13', ?, ?, ?, NOW(), 'active')"
     );
     if(!$stmtCust) throw new Exception('No se pudo preparar la inserción del cliente: ' . mysqli_error($conexion));
     mysqli_stmt_bind_param($stmtCust, 'sssss', $nombre, $apellido, $documento, $correo, $telefono);

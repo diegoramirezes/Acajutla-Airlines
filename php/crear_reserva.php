@@ -300,6 +300,34 @@ try{
     if($stmtUpdateFares) mysqli_stmt_close($stmtUpdateFares);
 
     // 2.4 Generar PNR único.
+    $tarifasInfo = []; // key: "$flightId-$fareClass" => ['id' => fare_id, 'price' => price]
+    $stmtObtenerTarifa = mysqli_prepare($conexion,
+        "SELECT ff.id, ff.price
+         FROM flight_fares ff
+         JOIN fare_classes fc ON ff.fare_class_id = fc.id
+         WHERE ff.flight_id = ? AND fc.code = ? AND ff.active = 1
+           AND (ff.valid_to IS NULL OR ff.valid_to > NOW())
+         ORDER BY ff.valid_from DESC, ff.id DESC LIMIT 1"
+    );
+    if($stmtObtenerTarifa){
+        foreach($segmentos as $seg){
+            $fId = (int)$seg['flight_id'];
+            $fClass = (string)$seg['fare_class'];
+            $codFare = $mapaClaseCodigo[$fClass] ?? 'ECONOMICA';
+            $tKey = "$fId-$fClass";
+            if(!isset($tarifasInfo[$tKey])){
+                mysqli_stmt_bind_param($stmtObtenerTarifa, 'is', $fId, $codFare);
+                mysqli_stmt_execute($stmtObtenerTarifa);
+                $resT = mysqli_stmt_get_result($stmtObtenerTarifa);
+                if($rowT = mysqli_fetch_assoc($resT)){
+                    $tarifasInfo[$tKey] = ['id' => (int)$rowT['id'], 'price' => (float)$rowT['price']];
+                }
+                if($resT) mysqli_free_result($resT);
+            }
+        }
+        mysqli_stmt_close($stmtObtenerTarifa);
+    }
+
     $pnr = generarPnr($conexion);
     if($pnr === null){
         throw new Exception('No se pudo generar un PNR único.');
@@ -411,21 +439,20 @@ try{
     //     un error claro en vez de guardar un valor no verificado.
     $mapaTipoPasajero = ['adult' => 'adult', 'young' => 'child', 'child' => 'child', 'infant' => 'infant'];
     // passengers.document_type es CHAR(2) NOT NULL. Mapeo confirmado:
-    // 13=DUI y 03=Pasaporte (catálogo oficial de Hacienda El Salvador,
-    // confirmado contra el dato real ya existente en producción).
+    // 13=DUI, 3=Pasaporte (según CAT-022 de Hacienda El Salvador y dteService.js)
     // 37=Otro se adopta como CONVENCIÓN DEL PROYECTO para representar
     // "Carnet de menor", ya que no existe un código específico oficial
     // confirmado para ese documento.
     $mapaTipoDocumento = [
         'DUI' => '13',
-        'PASAPORTE' => '03',
+        'PASAPORTE' => '3',
         'CARNET_MENOR' => '37'
     ];
 
     $passengerIds = [];
     $stmtPax = mysqli_prepare($conexion,
-        "INSERT INTO passengers (reservation_id, passenger_type, first_names, last_names, document_type, document_number, nationality, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())"
+        "INSERT INTO passengers (reservation_id, passenger_type, first_names, last_names, document_type, document_number, birth_date, nationality, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())"
     );
     if(!$stmtPax){
         throw new Exception('No se pudo preparar la inserción de pasajeros: ' . mysqli_error($conexion));
@@ -452,6 +479,12 @@ try{
             throw new Exception('Tipo de documento no válido: ' . $tipoDocumentoFrontend);
         }
         $tipoDocumento = $mapaTipoDocumento[$tipoDocumentoFrontend];
+
+        // Fecha de nacimiento enviada desde el formulario (o null si no viene)
+        $birthDate = null;
+        if(isset($p['fechaNacimiento']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$p['fechaNacimiento'])){
+            $birthDate = (string)$p['fechaNacimiento'];
+        }
 
         // Validación de formato en backend (no confiar solo en el frontend),
         // mismo criterio que Validar.documentoValido() en index.php: DUI
@@ -497,7 +530,7 @@ try{
             $paisesValidados[$codigoPais] = true;
         }
 
-        mysqli_stmt_bind_param($stmtPax, 'issssss', $reservationId, $passengerType, $nombres, $apellidos, $tipoDocumento, $documento, $codigoPais);
+        mysqli_stmt_bind_param($stmtPax, 'isssssss', $reservationId, $passengerType, $nombres, $apellidos, $tipoDocumento, $documento, $birthDate, $codigoPais);
         if(!mysqli_stmt_execute($stmtPax)){
             throw new Exception('No se pudo insertar un pasajero: ' . mysqli_stmt_error($stmtPax));
         }
@@ -521,10 +554,31 @@ try{
         }
     }
 
-    // 2.7 Insertar flight_segments (una fila por pasajero por segmento).
+    // 2.6-C Sincronizar birth_date y document_type en customers si el cliente está registrado
+    if($clienteId && !empty($pasajeros[0])){
+        $paxPrincipal = $pasajeros[0];
+        $tipoDocP = $mapaTipoDocumento[$paxPrincipal['tipoDocumento'] ?? ''] ?? '13';
+        $docNumP = isset($paxPrincipal['documento']) ? substr((string)$paxPrincipal['documento'], 0, 30) : null;
+        $birthDateP = (isset($paxPrincipal['fechaNacimiento']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$paxPrincipal['fechaNacimiento'])) ? (string)$paxPrincipal['fechaNacimiento'] : null;
+
+        $stmtUpdCust = @mysqli_prepare($conexion,
+            "UPDATE customers 
+             SET document_type = COALESCE(document_type, ?),
+                 document_number = COALESCE(document_number, ?),
+                 birth_date = COALESCE(birth_date, ?)
+             WHERE id = ?"
+        );
+        if($stmtUpdCust){
+            mysqli_stmt_bind_param($stmtUpdCust, 'sssi', $tipoDocP, $docNumP, $birthDateP, $clienteId);
+            @mysqli_stmt_execute($stmtUpdCust);
+            mysqli_stmt_close($stmtUpdCust);
+        }
+    }
+
+    // 2.7 Insertar flight_segments con tarifas y precios unitarios reales
     $stmtSeg = mysqli_prepare($conexion,
-        "INSERT INTO flight_segments (reservation_id, passenger_id, flight_id, fare_class, seat, paid_price, status)
-         VALUES (?, ?, ?, ?, ?, ?, 'confirmed')"
+        "INSERT INTO flight_segments (reservation_id, passenger_id, flight_id, fare_class, seat, fare_id, unit_price, total_price, paid_price, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')"
     );
     if(!$stmtSeg){
         throw new Exception('No se pudo preparar la inserción de segmentos: ' . mysqli_error($conexion));
@@ -533,17 +587,156 @@ try{
         $flightId = (int)$seg['flight_id'];
         $fareClass = (string)$seg['fare_class'];
         $precioUnitario = isset($seg['precio_unitario']) && is_numeric($seg['precio_unitario']) ? (float)$seg['precio_unitario'] : 0.0;
+        
+        $tarifaKey = "$flightId-$fareClass";
+        $fareIdVal = $tarifasInfo[$tarifaKey]['id'] ?? null;
+        if($precioUnitario <= 0.0 && isset($tarifasInfo[$tarifaKey]['price'])){
+            $precioUnitario = (float)$tarifasInfo[$tarifaKey]['price'];
+        }
+
         foreach($seg['asientos'] as $idx => $seat){
             if(!isset($passengerIds[$idx])) continue;
             $seatValor = ($seat === null || $seat === '' || $seat === '-') ? null : substr((string)$seat, 0, 5);
             $passengerId = $passengerIds[$idx];
-            mysqli_stmt_bind_param($stmtSeg, 'iiissd', $reservationId, $passengerId, $flightId, $fareClass, $seatValor, $precioUnitario);
+            mysqli_stmt_bind_param($stmtSeg, 'iiissiddd', $reservationId, $passengerId, $flightId, $fareClass, $seatValor, $fareIdVal, $precioUnitario, $precioUnitario, $precioUnitario);
             if(!mysqli_stmt_execute($stmtSeg)){
                 throw new Exception('No se pudo insertar un segmento de vuelo: ' . mysqli_stmt_error($stmtSeg));
             }
         }
     }
     mysqli_stmt_close($stmtSeg);
+
+    // 2.7-B Insertar líneas de impuestos (reservation_tax_lines) para cada pasajero y vuelo
+    $stmtFlightInfo = mysqli_prepare($conexion,
+        "SELECT ao.id AS airport_id, ao.country_id,
+                CASE WHEN ao.country_id = ad.country_id THEN 'domestic' ELSE 'international' END AS trip_type
+         FROM flights f
+         JOIN routes r ON r.id = f.route_id
+         JOIN airports ao ON ao.id = r.origin_id
+         JOIN airports ad ON ad.id = r.destination_id
+         WHERE f.id = ?"
+    );
+    $stmtTaxRules = mysqli_prepare($conexion,
+        "SELECT id, country_id, airport_id, code, name, calculation_type, value
+         FROM tax_rules
+         WHERE active = 1 AND country_id = ? AND (airport_id IS NULL OR airport_id = ?)
+           AND applies_to IN ('all', ?) AND valid_from <= NOW() AND (valid_to IS NULL OR valid_to > NOW())
+         ORDER BY airport_id IS NULL, id"
+    );
+    $stmtInsTax = mysqli_prepare($conexion,
+        "INSERT INTO reservation_tax_lines (reservation_id, passenger_id, flight_id, tax_rule_id, country_id, airport_id, code, name, calculation_type, rate, taxable_amount, amount)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    );
+
+    if($stmtFlightInfo && $stmtTaxRules && $stmtInsTax){
+        $factorPax = ['adult' => 1.0, 'young' => 0.75, 'child' => 0.75, 'infant' => 0.10];
+        foreach($segmentos as $seg){
+            $flightId = (int)$seg['flight_id'];
+            $fareClass = (string)$seg['fare_class'];
+            $tarifaKey = "$flightId-$fareClass";
+            $tarifaBase = $tarifasInfo[$tarifaKey]['price'] ?? (isset($seg['precio_unitario']) ? (float)$seg['precio_unitario'] : 0.0);
+
+            mysqli_stmt_bind_param($stmtFlightInfo, 'i', $flightId);
+            mysqli_stmt_execute($stmtFlightInfo);
+            $resFlight = mysqli_stmt_get_result($stmtFlightInfo);
+            $infoVuelo = $resFlight ? mysqli_fetch_assoc($resFlight) : null;
+            if($resFlight) mysqli_free_result($resFlight);
+
+            if($infoVuelo && !empty($infoVuelo['country_id'])){
+                $cId = (int)$infoVuelo['country_id'];
+                $aId = (int)$infoVuelo['airport_id'];
+                $tripType = (string)$infoVuelo['trip_type'];
+
+                mysqli_stmt_bind_param($stmtTaxRules, 'iis', $cId, $aId, $tripType);
+                mysqli_stmt_execute($stmtTaxRules);
+                $resTaxRules = mysqli_stmt_get_result($stmtTaxRules);
+                $reglasImpuestos = [];
+                while($rowR = mysqli_fetch_assoc($resTaxRules)){
+                    $reglasImpuestos[] = $rowR;
+                }
+                if($resTaxRules) mysqli_free_result($resTaxRules);
+
+                foreach($pasajeros as $idxPax => $paxItem){
+                    if(!isset($passengerIds[$idxPax])) continue;
+                    $paxId = $passengerIds[$idxPax];
+                    $tipoPax = $paxItem['tipo'] ?? 'adult';
+                    $factor = $factorPax[$tipoPax] ?? 1.0;
+                    $tarifaNetaPax = round($tarifaBase * $factor, 2);
+
+                    foreach($reglasImpuestos as $regla){
+                        $rId = (int)$regla['id'];
+                        $rCountry = (int)$regla['country_id'];
+                        $rAirport = !empty($regla['airport_id']) ? (int)$regla['airport_id'] : null;
+                        $rCode = (string)$regla['code'];
+                        $rName = (string)$regla['name'];
+                        $rCalc = (string)$regla['calculation_type'];
+                        $rRate = (float)$regla['value'];
+                        
+                        $montoImpuesto = ($rCalc === 'percentage')
+                            ? round($tarifaNetaPax * ($rRate / 100), 2)
+                            : round($rRate * $factor, 2);
+
+                        mysqli_stmt_bind_param($stmtInsTax, 'iiiiissssddd',
+                            $reservationId, $paxId, $flightId, $rId, $rCountry, $rAirport,
+                            $rCode, $rName, $rCalc, $rRate, $tarifaNetaPax, $montoImpuesto
+                        );
+                        @mysqli_stmt_execute($stmtInsTax);
+                    }
+                }
+            }
+        }
+        mysqli_stmt_close($stmtFlightInfo);
+        mysqli_stmt_close($stmtTaxRules);
+        mysqli_stmt_close($stmtInsTax);
+    }
+
+    // 2.7-C Insertar servicios y ancillaries seleccionados (reservation_ancillaries)
+    $serviciosPayload = isset($payload['servicios']) && is_array($payload['servicios']) ? $payload['servicios'] : [];
+    if(!empty($serviciosPayload) && !empty($segmentos[0]['flight_id'])){
+        $primerFlightId = (int)$segmentos[0]['flight_id'];
+        $mapaAncillaryCode = [
+            'EQ_EXTRA' => 'BAG23',
+            'EQUIPAJE_EXTRA_23' => 'BAG23',
+            'EQ_DEPORTIVO' => 'BAG32',
+            'EQUIPAJE_EXTRA_32' => 'BAG32',
+            'SALA_VIP' => 'LOUNGE',
+            'ABORDAJE_PRIORITARIO' => 'PRIO-1',
+            'ASIST_MEDICA' => 'LOUNGE'
+        ];
+
+        $stmtBusqAnc = mysqli_prepare($conexion, "SELECT id, base_price FROM ancillaries WHERE code = ? AND active = 1 LIMIT 1");
+        $stmtInsAnc = mysqli_prepare($conexion,
+            "INSERT INTO reservation_ancillaries (reservation_id, passenger_id, flight_id, ancillary_id, price, status)
+             VALUES (?, ?, ?, ?, ?, 'active')"
+        );
+
+        if($stmtBusqAnc && $stmtInsAnc){
+            foreach($serviciosPayload as $serv){
+                $sId = $serv['servicioId'] ?? '';
+                $ancCode = $mapaAncillaryCode[$sId] ?? null;
+                if(!$ancCode) continue;
+
+                $paxIndex = isset($serv['pasajeroIdx']) ? (int)$serv['pasajeroIdx'] : 0;
+                $paxId = $passengerIds[$paxIndex] ?? $passengerIds[0];
+                $precioServicio = isset($serv['precio']) ? (float)$serv['precio'] : 0.0;
+
+                mysqli_stmt_bind_param($stmtBusqAnc, 's', $ancCode);
+                mysqli_stmt_execute($stmtBusqAnc);
+                $resAnc = mysqli_stmt_get_result($stmtBusqAnc);
+                $rowAnc = $resAnc ? mysqli_fetch_assoc($resAnc) : null;
+                if($resAnc) mysqli_free_result($resAnc);
+
+                if($rowAnc){
+                    $ancId = (int)$rowAnc['id'];
+                    $precioFinal = ($precioServicio > 0.0) ? $precioServicio : (float)$rowAnc['base_price'];
+                    mysqli_stmt_bind_param($stmtInsAnc, 'iiisd', $reservationId, $paxId, $primerFlightId, $ancId, $precioFinal);
+                    @mysqli_stmt_execute($stmtInsAnc);
+                }
+            }
+            mysqli_stmt_close($stmtBusqAnc);
+            mysqli_stmt_close($stmtInsAnc);
+        }
+    }
 
     // 2.8 Asegurar que estimated_total y paid_total queden con el monto real exacto
     //     sin duplicaciones por triggers de base de datos.

@@ -3633,7 +3633,7 @@ const Pago = {
         cliente_id: Estado.usuario ? Estado.usuario.id : null,
         tipo_viaje: Estado.busqueda.tipoViaje,
         total: Estado.precios.total,
-        pasajeros: Estado.pasajeros.map(p=>({nombres:p.nombres, apellidos:p.apellidos, documento:p.numeroDocumento, tipo:p.type, tipoDocumento:p.tipoDocumento, nacionalidad:p.nacionalidad})),
+        pasajeros: Estado.pasajeros.map(p=>({nombres:p.nombres, apellidos:p.apellidos, documento:p.numeroDocumento, tipo:p.type, tipoDocumento:p.tipoDocumento, nacionalidad:p.nacionalidad, fechaNacimiento:p.fechaNacimiento||null})),
         segmentos: segmentosPayload,
         pago: {metodo:this.metodo, estado: resultadoPago.estado || 'APROBADO', monto: Estado.precios.total, ultimos4: detalle.tarjeta_terminacion || null},
         servicios: Util.obtenerDetalleServicios(),

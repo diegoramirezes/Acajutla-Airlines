@@ -1422,12 +1422,15 @@ const Util = {
     RETRASADO:{label:'Retrasado', clase:'badge-retrasado'},
     DESVIADO:{label:'Desviado', clase:'badge-desviado'},
     // flights.status (nuevo esquema real)
-    SCHEDULED:{label:'Programado', clase:'badge-programado'},
-    CONFIRMED:{label:'Confirmado', clase:'badge-programado'},
-    IN_PROGRESS:{label:'En vuelo', clase:'badge-despegado'},
-    DELAYED:{label:'Retrasado', clase:'badge-retrasado'},
-    COMPLETED:{label:'Aterrizado', clase:'badge-aterrizado'},
-    CANCELLED:{label:'Cancelado', clase:'badge-cancelado'}
+    SCHEDULED:{label:'Programado',  clase:'badge-programado'},
+    CONFIRMED:{label:'Confirmado',  clase:'badge-programado'},
+    IN_PROGRESS:{label:'En vuelo',  clase:'badge-despegado'},
+    AIRBORNE:{label:'En vuelo',     clase:'badge-despegado'},   // auto-derivado por estado_vuelo.php
+    IN_FLIGHT:{label:'En vuelo',    clase:'badge-despegado'},   // alias por si la BD usa in_flight
+    DELAYED:{label:'Retrasado',     clase:'badge-retrasado'},
+    LANDED:{label:'Aterrizado',     clase:'badge-aterrizado'},  // auto-derivado por estado_vuelo.php
+    COMPLETED:{label:'Finalizado',  clase:'badge-aterrizado'},
+    CANCELLED:{label:'Cancelado',   clase:'badge-cancelado'}
   },
 
   badgeClaseEstado(estado){

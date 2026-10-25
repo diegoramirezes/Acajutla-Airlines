@@ -89,14 +89,56 @@ if(!$fila){
     exit;
 }
 
+// -----------------------------------------------------------------
+// Auto-derivar estado efectivo basado en la hora actual vs horarios
+// programados. Esto corrige casos en que la BD tiene status='scheduled'
+// aunque el vuelo ya despegó o ya aterrizó.
+// Zona horaria: El Salvador = America/El_Salvador (UTC-6, sin DST).
+// Se usa la misma lógica de CONVERT_TZ que en vuelos_en_vuelo.php.
+// -----------------------------------------------------------------
+$tz     = new DateTimeZone('America/El_Salvador');
+$ahora  = new DateTime('now', $tz);
+$salida = new DateTime($fila['departure_datetime'], $tz);
+$llegada= new DateTime($fila['arrival_datetime'],   $tz);
+
+$estadoDB    = strtolower($fila['status']);
+$estadoEfect = $estadoDB;  // punto de partida
+
+// Estados que la BD puede dejar "congelados" sin que SkyManager los actualice
+$desactualizables = ['scheduled', 'confirmed', 'programado'];
+
+if(in_array($estadoDB, $desactualizables)){
+    if($ahora > $llegada){
+        // El vuelo ya aterrizó
+        $estadoEfect = 'landed';
+    } elseif($ahora >= $salida){
+        // El vuelo está en el aire ahora mismo
+        $estadoEfect = 'airborne';
+    }
+}
+
+// Horas "reales": si el vuelo ya despegó usamos las horas programadas como
+// aproximación (la BD no tiene columnas actual_departure/actual_arrival).
+$salidaReal  = null;
+$llegadaReal = null;
+if($estadoEfect === 'airborne'){
+    $salidaReal = $fila['departure_datetime'];
+}
+if($estadoEfect === 'landed'){
+    $salidaReal  = $fila['departure_datetime'];
+    $llegadaReal = $fila['arrival_datetime'];
+}
+
 http_response_code(200);
 echo json_encode(['ok' => true, 'data' => [
-    'numero_vuelo' => $fila['flight_number'],
-    'estado' => $fila['status'],
-    'salida_programada' => $fila['departure_datetime'],
-    'llegada_programada' => $fila['arrival_datetime'],
-    'puerta' => $fila['gate'],
-    'terminal' => $fila['terminal'],
+    'numero_vuelo'     => $fila['flight_number'],
+    'estado'           => $estadoEfect,
+    'salida_programada'=> $fila['departure_datetime'],
+    'llegada_programada'=> $fila['arrival_datetime'],
+    'salida_real'      => $salidaReal,
+    'llegada_real'     => $llegadaReal,
+    'puerta'           => $fila['gate'],
+    'terminal'         => $fila['terminal'],
     'origen' => [
         'id' => (int)$fila['origen_id'], 'codigo_iata' => $fila['origen_iata'], 'codigo_icao' => $fila['origen_icao'],
         'nombre' => $fila['origen_nombre'], 'ciudad' => $fila['origen_ciudad'], 'codigo_pais' => $fila['origen_pais'], 'zona_horaria' => $fila['origen_tz']

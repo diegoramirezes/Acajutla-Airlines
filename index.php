@@ -4081,7 +4081,7 @@ const VuelosEnVivo = {
       if(!recibidos.some(v => v.numero_vuelo === nv)){
         if(this.seleccionado === nv){ this.seleccionado = null; const d = document.getElementById('envivoDetalle'); if(d) d.innerHTML=''; }
         this.mapa.removeLayer(this.vuelos[nv].marcador);
-        this.mapa.removeLayer(this.vuelos[nv].polyline);
+        if(this.mapa.hasLayer(this.vuelos[nv].polyline)) this.mapa.removeLayer(this.vuelos[nv].polyline);
         delete this.vuelos[nv];
       }
     });
@@ -4126,8 +4126,8 @@ const VuelosEnVivo = {
     const marcador = L.marker(cOrigen, {icon: icono, zIndexOffset: 1000})
       .addTo(this.mapa)
       .on('click', ()=>this.seleccionar(v.numero_vuelo));
+    // La polyline se crea pero NO se agrega al mapa; solo se muestra al seleccionar.
     const polyline = L.polyline([cOrigen, cDestino], {color:'#F4B400', weight:2.5, opacity:0.9, dashArray:'8,6'})
-      .addTo(this.mapa)
       .on('click', ()=>this.seleccionar(v.numero_vuelo));
     L.circleMarker(cOrigen, {radius:6, color:'#ffffff', weight:2, fillColor:'#003B95', fillOpacity:1})
       .addTo(this.mapa)
@@ -4135,13 +4135,24 @@ const VuelosEnVivo = {
     L.circleMarker(cDestino, {radius:6, color:'#ffffff', weight:2, fillColor:'#2E8B57', fillOpacity:1})
       .addTo(this.mapa)
       .bindTooltip(`${v.destino.codigo_iata} · ${v.destino.ciudad}`, {permanent:true, direction:'top', className:'envivo-etiqueta-aeropuerto'});
+    // Si la BD no tiene distancia_km, calcularla con Haversine desde coordenadas IATA.
+    if(v.distancia_km === null || v.distancia_km === undefined){
+      v.distancia_km = this.haversine(cOrigen, cDestino);
+    }
     this.vuelos[v.numero_vuelo] = {datos: v, marcador, polyline, progreso: v.progreso};
   },
 
   seleccionar(numeroVuelo){
     const v = this.vuelos[numeroVuelo];
     if(!v) return;
+    // Ocultar la polyline del vuelo anteriormente seleccionado
+    if(this.seleccionado && this.seleccionado !== numeroVuelo){
+      const anterior = this.vuelos[this.seleccionado];
+      if(anterior && this.mapa.hasLayer(anterior.polyline)) this.mapa.removeLayer(anterior.polyline);
+    }
     this.seleccionado = numeroVuelo;
+    // Mostrar la polyline del vuelo seleccionado
+    if(!this.mapa.hasLayer(v.polyline)) v.polyline.addTo(this.mapa);
     this.mapa.setView(v.marcador.getLatLng(), 6);
     document.querySelectorAll('.envivo-card').forEach(el => el.classList.remove('activa'));
     const card = document.getElementById('envivoInfo_' + numeroVuelo)?.closest('.envivo-card');
@@ -4173,6 +4184,11 @@ const VuelosEnVivo = {
   },
 
   cerrarDetalle(){
+    // Ocultar la polyline del vuelo que estaba seleccionado
+    if(this.seleccionado){
+      const v = this.vuelos[this.seleccionado];
+      if(v && this.mapa.hasLayer(v.polyline)) this.mapa.removeLayer(v.polyline);
+    }
     this.seleccionado = null;
     const cont = document.getElementById('envivoDetalle');
     if(cont) cont.innerHTML = '';
@@ -4215,6 +4231,18 @@ const VuelosEnVivo = {
   },
 
   // ----- Matemática de rutas ortodrómicas (tierra esférica, R=6371 km) -----
+
+  // Distancia Haversine entre dos puntos [lat,lng] → km.
+  // Se usa como fallback cuando la BD no tiene distance_km en la ruta.
+  haversine(a, b){
+    const R = 6371;
+    const rad = Math.PI/180;
+    const dLat = (b[0]-a[0])*rad;
+    const dLng = (b[1]-a[1])*rad;
+    const s = Math.sin(dLat/2)**2 + Math.cos(a[0]*rad)*Math.cos(b[0]*rad)*Math.sin(dLng/2)**2;
+    return Math.round(R * 2 * Math.asin(Math.sqrt(s)));
+  },
+
   rumbo(a, b){
     const rad = Math.PI/180;
     const lat1=a[0]*rad, lat2=b[0]*rad, dLng=(b[1]-a[1])*rad;

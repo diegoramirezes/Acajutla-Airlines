@@ -69,6 +69,7 @@
 header('Content-Type: application/json; charset=utf-8');
 
 require_once __DIR__ . '/conexion.php';
+require_once __DIR__ . '/dte_helper.php';
 
 function responderError($mensaje, $codigo){
     http_response_code($codigo);
@@ -759,41 +760,33 @@ try{
     mysqli_commit($conexion);
 
     // =======================================================================
-    // LLAMADA AL SISTEMA BASE (NODE.JS) PARA FACTURACIÓN DTE
+    // EMISIÓN FORMAL DE FACTURACIÓN ELECTRÓNICA (DTE) TIPO 01
     // =======================================================================
-    // Aquí preparamos la integración con el backend de tu compañero.
-    // Reemplazar la URL cuando el endpoint de Node.js esté listo.
-    $nodeApiUrl = "http://localhost:3000/api/dte/generate"; // URL de ejemplo
-    
-    $payloadDte = [
-        "reservation_id" => $reservationId,
-        "pnr" => $pnr,
-        "customer_email" => $contactoEmail,
-        "total" => $total
-    ];
-
-    $ch = curl_init($nodeApiUrl);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payloadDte));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json',
-        'Accept: application/json'
-    ]);
-    // Timeout corto para no bloquear la respuesta al usuario si el servidor Node está caído
-    curl_setopt($ch, CURLOPT_TIMEOUT, 5); 
-
-    $resDte = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if($httpCode >= 200 && $httpCode < 300) {
-        error_log("[Acajutla Airlines] Facturación DTE iniciada correctamente para PNR $pnr.");
-    } else {
-        // Solo registramos el error para no arruinar la experiencia del usuario, 
-        // ya que la reserva sí se completó con éxito en la BD.
-        error_log("[Acajutla Airlines] Advertencia: No se pudo generar DTE para PNR $pnr. HTTP Code: $httpCode. Respuesta: $resDte");
+    // Inserta directamente en dte_headers y dte_items con el formato del
+    // Ministerio de Hacienda para que el DTE aparezca de inmediato en el
+    // panel de Facturación Electrónica (DTE) del sistema de tu compañero.
+    $flightNumbersDte = [];
+    foreach($segmentos as $s){
+        if(!empty($s['numero_vuelo'])) {
+            $flightNumbersDte[] = $s['numero_vuelo'];
+        }
     }
+    $contactoDocTipoDte = $pasajeros[0]['tipoDocumento'] ?? 'DUI';
+    $contactoDocNumDte = $pasajeros[0]['documento'] ?? '';
+
+    emitirDteWeb(
+        $conexion,
+        $reservationId,
+        $pnr,
+        $contactoNombre,
+        $contactoDocTipoDte,
+        $contactoDocNumDte,
+        $contactoEmail,
+        $contactoTelefono,
+        $metodoPago,
+        $total,
+        $flightNumbersDte
+    );
     // =======================================================================
 
     cerrarConexion();

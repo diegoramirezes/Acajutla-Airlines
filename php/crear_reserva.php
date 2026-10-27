@@ -193,12 +193,19 @@ try{
 
     // 2.2 Con los vuelos ya bloqueados, consultar qué asientos están
     //     realmente ocupados (misma regla que asientos_ocupados.php).
+    //     Se usa (fs.status IS NULL OR fs.status <> 'cancelled') en lugar
+    //     de fs.status <> 'cancelled' para cubrir reservas creadas por
+    //     SkyManager (backend del compañero), cuyo INSERT no incluye la
+    //     columna status → queda NULL → la condición <> 'cancelled' sería
+    //     UNKNOWN en SQL y excluiría esas filas incorrectamente.
     $ocupadosPorVuelo = []; // flight_id => [seat => true]
     $stmtLock = mysqli_prepare($conexion,
         "SELECT fs.seat, r.status, r.time_limit
          FROM flight_segments fs
          INNER JOIN reservations r ON r.id = fs.reservation_id
-         WHERE fs.flight_id = ? AND fs.status <> 'cancelled'"
+         WHERE fs.flight_id = ?
+           AND (fs.status IS NULL OR fs.status <> 'cancelled')
+           AND (fs.checkin_status IS NULL OR fs.checkin_status <> 'no_show')"
     );
     if(!$stmtLock){
         throw new Exception('No se pudo preparar la verificación de disponibilidad.');

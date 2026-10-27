@@ -54,11 +54,32 @@ if(!ctype_digit((string)$vueloId)){
 }
 $vueloIdInt = (int)$vueloId;
 
+// -------------------------------------------------------------------
+// Asientos ocupados: se consideran ocupados todos los segmentos cuya
+// reserva sigue activa (no cancelada, y si está pending que no haya
+// expirado) y cuyo segmento no esté cancelado.
+//
+// NOTA IMPORTANTE — compatibilidad con SkyManager (backend del compañero):
+//   El backend Node.js NO inserta la columna `status` en flight_segments
+//   (su INSERT solo incluye reservation_id, passenger_id, flight_id,
+//   fare_class, seat, fare_id, unit_price, total_price). Si esa columna
+//   tiene DEFAULT NULL, la condición `fs.status <> 'cancelled'` resulta
+//   UNKNOWN en SQL (NULL <> cadena = UNKNOWN, no TRUE), y esas filas
+//   se excluyen silenciosamente → el asiento no aparece ocupado → doble
+//   reserva posible.
+//
+//   Corrección: se usa `(fs.status IS NULL OR fs.status <> 'cancelled')`
+//   que es TRUE tanto para NULL (reservas de SkyManager) como para
+//   cualquier valor distinto de 'cancelled' (reservas del sitio web).
+//   También se excluyen no-shows verificados (checkin_status='no_show'),
+//   que son pasajeros que no se presentaron y cuyo asiento se libera.
+// -------------------------------------------------------------------
 $sql = "SELECT fs.seat
         FROM flight_segments fs
         INNER JOIN reservations r ON r.id = fs.reservation_id
         WHERE fs.flight_id = ?
-          AND fs.status <> 'cancelled'
+          AND (fs.status IS NULL OR fs.status <> 'cancelled')
+          AND (fs.checkin_status IS NULL OR fs.checkin_status <> 'no_show')
           AND fs.seat IS NOT NULL
           AND r.status <> 'cancelled'
           AND (r.status <> 'pending' OR r.time_limit IS NULL OR r.time_limit > NOW())";

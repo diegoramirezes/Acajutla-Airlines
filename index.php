@@ -977,38 +977,29 @@ const Estado = {
 };
 
 /* -----------------------------------------------------------------------
-   PERSISTENCIA DEL ESTADO (localStorage)
-   Sobrevive al botón de refrescar (F5 / flecha del navegador) y al reiniciar
-   el navegador: la sesión, vuelos, asientos, pasajeros y contacto se restauran
-   tal como estaban.
-   aeropuertosDisponibles NO se guarda: se recarga del backend al iniciar.
+   PERSISTENCIA DEL ESTADO
+   Al recargar/reiniciar la página se borran los datos temporales del
+   proceso de reserva y se inicia limpio en la página principal ('inicio').
 ----------------------------------------------------------------------- */
 const Persistencia = {
   CLAVE: 'acajutla_estado_v1',
-  CAMPOS: ['ruta','busqueda','resultados','modoResultados','vueloIda','tarifaIda','precioTarifaIda',
-           'vueloRegreso','tarifaRegreso','precioTarifaRegreso','pasajeros','segmentos','asientos',
-           'servicios','contacto','precios','reservaActual','usuario'],
 
   guardar(){
-    try{
-      const datos = {};
-      this.CAMPOS.forEach(c=>{ datos[c] = Estado[c]; });
-      localStorage.setItem(this.CLAVE, JSON.stringify(datos));
-    }catch(e){ /* storage lleno o bloqueado: la app sigue funcionando sin persistencia */ }
+    // No persistir datos de formulario ni estado de reserva entre recargas
   },
 
   restaurar(){
     try{
-      // Limpiar residuo de la versión anterior que usaba sessionStorage
       sessionStorage.removeItem(this.CLAVE);
-      const crudo = localStorage.getItem(this.CLAVE);
-      if(!crudo) return;
-      const datos = JSON.parse(crudo);
-      if(!datos || typeof datos !== 'object') return;
-      this.CAMPOS.forEach(c=>{
-        if(datos[c] !== undefined) Estado[c] = datos[c];
-      });
-    }catch(e){ /* estado corrupto: se arranca limpio */ }
+      localStorage.removeItem(this.CLAVE);
+    }catch(e){}
+  },
+
+  limpiar(){
+    try{
+      sessionStorage.removeItem(this.CLAVE);
+      localStorage.removeItem(this.CLAVE);
+    }catch(e){}
   }
 };
 
@@ -4341,21 +4332,10 @@ async function cargarMetricasInicio(){
 }
 
 (function init(){
-  // Restaurar lo que el usuario tenía (sesión, vuelos, asientos, etc.)
-  // y devolverlo a la pantalla donde estaba antes de recargar la página.
+  // Limpiar cualquier estado previo guardado en el navegador
   Persistencia.restaurar();
-  // Si había sesión guardada, reflejarla en el botón del menú.
-  if(Estado.usuario){
-    const btnNav = document.getElementById('btnAuthNav');
-    if(btnNav){
-      btnNav.textContent = Estado.usuario.nombre || Estado.usuario.correo || 'Mi cuenta';
-      btnNav.onclick = ()=>Navegacion.ir('perfil');
-    }
-  }
-  Navegacion.ir(Estado.ruta || 'inicio', {silencioso:true});
-  // La recarga/descarga de la página también guarda el estado actual.
-  window.addEventListener('beforeunload', ()=>Persistencia.guardar());
-  window.addEventListener('pagehide', ()=>Persistencia.guardar());
+  Estado.ruta = 'inicio';
+  Navegacion.ir('inicio', {silencioso:true});
   cargarAeropuertosReales();
   cargarMetricasInicio();
 

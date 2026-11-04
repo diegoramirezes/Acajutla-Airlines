@@ -200,7 +200,7 @@ try {
                     $multiplier = (float)$fc['multiplier'];
                     $farePrice = round($precioBaseIda * $multiplier, 2);
                     $seatsAlloc = ($fc['code'] === 'ECONOMICA') ? 120 : (($fc['code'] === 'PREMIUM') ? 24 : 12);
-                    $stmtFare->bind_param("iidii", $flightIdIda, $fc['id'], $farePrice, $seatsAlloc);
+                    $stmtFare->bind_param("iidi", $flightIdIda, $fc['id'], $farePrice, $seatsAlloc);
                     $stmtFare->execute();
                     $totalTarifas++;
                 }
@@ -251,7 +251,7 @@ try {
                     $multiplier = (float)$fc['multiplier'];
                     $farePrice = round($precioBaseReg * $multiplier, 2);
                     $seatsAlloc = ($fc['code'] === 'ECONOMICA') ? 120 : (($fc['code'] === 'PREMIUM') ? 24 : 12);
-                    $stmtFare->bind_param("iidii", $flightIdReg, $fc['id'], $farePrice, $seatsAlloc);
+                    $stmtFare->bind_param("iidi", $flightIdReg, $fc['id'], $farePrice, $seatsAlloc);
                     $stmtFare->execute();
                     $totalTarifas++;
                 }

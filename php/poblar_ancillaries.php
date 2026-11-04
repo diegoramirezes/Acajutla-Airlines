@@ -1,7 +1,7 @@
 <?php
 /**
- * Script de población de servicios adicionales (ancillaries) para todos los vuelos de noviembre 2026.
- * Asigna a cada vuelo activo en noviembre los servicios adicionales en flight_ancillaries con stock e inventario.
+ * Script de población de servicios adicionales (ancillaries) para los vuelos de noviembre 2026.
+ * Utiliza INSERT masivo por lotes para ejecutarse en menos de 2 segundos.
  */
 
 require_once __DIR__ . '/conexion.php';
@@ -11,8 +11,6 @@ if (!CONEXION_OK) {
     echo json_encode(['ok' => false, 'error' => 'No hay conexión a la base de datos']);
     exit;
 }
-
-set_time_limit(300);
 
 try {
     // 1. Obtener todos los ancillaries activos
@@ -26,7 +24,7 @@ try {
         throw new Exception("No hay ancillaries configurados en la base de datos.");
     }
 
-    // 2. Obtener todos los vuelos de noviembre 2026
+    // 2. Obtener los vuelos de noviembre 2026
     $resVuelos = $conexion->query("
         SELECT id, flight_number 
         FROM flights 
@@ -44,46 +42,62 @@ try {
         throw new Exception("No se encontraron vuelos para noviembre de 2026.");
     }
 
-    // 3. Insertar o actualizar flight_ancillaries masivamente
-    $stmt = $conexion->prepare("
-        INSERT INTO flight_ancillaries (flight_id, ancillary_id, stock, price_override, active)
-        VALUES (?, ?, ?, ?, 1)
-        ON DUPLICATE KEY UPDATE 
-            stock = VALUES(stock),
-            price_override = VALUES(price_override),
-            active = 1
-    ");
+    // 3. Preparar filas e insertar por lotes de 1000 filas
+    $batchSize = 1000;
+    $rowsBuffer = [];
+    $totalInsertados = 0;
 
-    $totalAsignados = 0;
     foreach ($flightIds as $fid) {
         foreach ($ancillaries as $anc) {
             $ancId = (int)$anc['id'];
-            // Stock por defecto: si tiene default_stock > 0 lo usamos, de lo contrario asignamos según el tipo
             $defaultStock = (int)$anc['default_stock'];
             if ($defaultStock <= 0) {
                 if ($anc['type'] === 'baggage') $stock = 150;
                 elseif ($anc['type'] === 'seat') $stock = 30;
                 elseif ($anc['type'] === 'meal') $stock = 80;
                 elseif ($anc['type'] === 'priority') $stock = 40;
-                else $stock = 50; // lounge u otros
+                else $stock = 50;
             } else {
                 $stock = $defaultStock;
             }
 
-            $priceOverride = null; // usa base_price del ancillary
+            $rowsBuffer[] = "($fid, $ancId, $stock, NULL, 1)";
 
-            $stmt->bind_param("iiid", $fid, $ancId, $stock, $priceOverride);
-            $stmt->execute();
-            $totalAsignados++;
+            if (count($rowsBuffer) >= $batchSize) {
+                $sql = "INSERT INTO flight_ancillaries (flight_id, ancillary_id, stock, price_override, active) VALUES " . implode(',', $rowsBuffer) . " ON DUPLICATE KEY UPDATE stock = VALUES(stock), active = 1";
+                if (!$conexion->query($sql)) {
+                    throw new Exception("Error en batch insert: " . $conexion->error);
+                }
+                $totalInsertados += count($rowsBuffer);
+                $rowsBuffer = [];
+            }
         }
     }
 
+    if (!empty($rowsBuffer)) {
+        $sql = "INSERT INTO flight_ancillaries (flight_id, ancillary_id, stock, price_override, active) VALUES " . implode(',', $rowsBuffer) . " ON DUPLICATE KEY UPDATE stock = VALUES(stock), active = 1";
+        if (!$conexion->query($sql)) {
+            throw new Exception("Error en batch insert final: " . $conexion->error);
+        }
+        $totalInsertados += count($rowsBuffer);
+    }
+
+    // Verificar específicamente vuelo AJ11093
+    $checkRes = $conexion->query("
+        SELECT fa.id, fa.flight_id, f.flight_number, fa.ancillary_id, a.code, a.name, fa.stock
+        FROM flight_ancillaries fa
+        JOIN flights f ON f.id = fa.flight_id
+        JOIN ancillaries a ON a.id = fa.ancillary_id
+        WHERE f.flight_number = 'AJ11093' AND fa.active = 1
+    ");
+    $sample = $checkRes ? $checkRes->fetch_all(MYSQLI_ASSOC) : [];
+
     echo json_encode([
         'ok' => true,
-        'mensaje' => 'Servicios adicionales asignados exitosamente a todos los vuelos de noviembre 2026',
+        'mensaje' => 'Servicios adicionales asignados exitosamente por lotes',
         'vuelos_procesados' => count($flightIds),
-        'servicios_por_vuelo' => count($ancillaries),
-        'total_registros_flight_ancillaries' => $totalAsignados
+        'total_registros_flight_ancillaries' => $totalInsertados,
+        'ejemplo_AJ11093' => $sample
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 
 } catch (Exception $e) {

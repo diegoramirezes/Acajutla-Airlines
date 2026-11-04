@@ -146,7 +146,7 @@ const hacerCheckin = async (req, res) => {
       [s.flight_id]
     );
     const hasPilot = crewRows.some(c => c.role_operativo === 'pilot');
-    const hasCopilot = crewRows.some(c => c.role_operativo === 'copiloto');
+    const hasCopilot = crewRows.some(c => c.role_operativo === 'copilot' || c.role_operativo === 'copiloto');
     if (!hasPilot || !hasCopilot) {
       await conn.rollback();
       return res.status(409).json({ error: 'OP-01: Operación bloqueada. El vuelo no tiene asignada la tripulación técnica mínima (Piloto y Copiloto).' });
